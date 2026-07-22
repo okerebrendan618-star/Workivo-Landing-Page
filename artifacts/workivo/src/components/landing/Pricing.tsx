@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Star } from 'lucide-react';
+import { Check, Star, Users } from 'lucide-react';
 
 export default function Pricing() {
   const [annual, setAnnual] = useState(false);
@@ -8,49 +8,34 @@ export default function Pricing() {
   const plans = [
     {
       name: 'Free',
-      price: '0',
+      monthlyPrice: '0',
+      annualPrice: '0',
       description: 'Perfect for casual job seekers.',
       features: [
-        '3 resume optimizations/month',
-        'Basic ATS scoring',
-        'Basic cover letters',
-        'PDF & DOCX export',
+        '3 ATS resume scans / month',
+        '3 resume tailors / month',
+        'Basic job application tracker',
+        'PDF export',
         'Community support',
       ],
       buttonText: 'Get Started Free',
       isPopular: false,
-      isTeams: false,
     },
     {
       name: 'Pro',
-      price: annual ? '15' : '19',
-      description: 'For ambitious professionals.',
+      monthlyPrice: '10',
+      annualPrice: '8',
+      description: 'For serious job seekers who want results.',
       features: [
-        'Unlimited resume optimizations',
-        'Advanced ATS scoring insights',
-        'Tailored cover letters',
-        'LinkedIn profile optimization',
+        'Unlimited ATS resume scans',
+        'Unlimited resume tailoring',
+        'Full job application tracker',
         'Priority AI processing',
-        '24/7 Email support'
+        'Early access to new features',
+        '24/7 email support',
       ],
       buttonText: 'Start Free Trial',
       isPopular: true,
-      isTeams: false,
-    },
-    {
-      name: 'Teams',
-      price: annual ? '39' : '49',
-      description: 'For career coaches & agencies.',
-      features: [
-        'Everything in Pro',
-        'Up to 5 team seats',
-        'Centralized client management',
-        'Analytics dashboard',
-        'Dedicated success manager',
-      ],
-      buttonText: 'Contact Sales',
-      isPopular: false,
-      isTeams: true,
     },
   ];
 
@@ -87,7 +72,7 @@ export default function Pricing() {
         </div>
 
         {/* Billing Toggle */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 10 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
@@ -114,23 +99,24 @@ export default function Pricing() {
                 Save 20%
               </span>
             </button>
-            
-            {/* Active Pill Background */}
+
+            {/* Active Pill */}
             <div
-              className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-indigo-600 rounded-full shadow-md transition-transform duration-300 ease-in-out ${
-                annual ? 'translate-x-[calc(100%+4px)]' : 'translate-x-0'
-              }`}
+              className={`absolute top-1 bottom-1 bg-indigo-600 rounded-full shadow-md transition-all duration-300 ease-in-out`}
               style={{
-                width: annual ? '130px' : '96px' // Approximate widths to fit content
+                width: annual ? '130px' : '96px',
+                transform: annual ? 'translateX(calc(100% - 34px))' : 'translateX(0)',
               }}
-            ></div>
+            />
           </div>
         </motion.div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-center max-w-6xl mx-auto mb-16">
+        {/* Plans Grid — 2 cards, centered */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center max-w-3xl mx-auto mb-12">
           {plans.map((plan, index) => {
             const isPopular = plan.isPopular;
-            
+            const price = annual ? plan.annualPrice : plan.monthlyPrice;
+
             return (
               <motion.div
                 key={plan.name}
@@ -145,19 +131,15 @@ export default function Pricing() {
                   <div className="absolute inset-0 bg-indigo-500/20 blur-3xl rounded-[28px] -z-10" />
                 )}
 
-                <div className={`relative h-full flex flex-col ${
-                  isPopular ? 'border-gradient p-[1px] rounded-[28px]' : ''
-                }`}>
+                <div className={`relative h-full flex flex-col ${isPopular ? 'border-gradient p-[1px] rounded-[28px]' : ''}`}>
                   <div className={`flex-1 flex flex-col p-8 ${
-                    isPopular 
-                      ? 'bg-[#0f0f1a] rounded-[27px]' 
-                      : plan.isTeams
-                        ? 'bg-white/[0.04] border border-white/[0.12] rounded-[28px]'
-                        : 'bg-white/[0.03] border border-white/[0.08] rounded-[28px]'
+                    isPopular
+                      ? 'bg-[#0f0f1a] rounded-[27px]'
+                      : 'bg-white/[0.03] border border-white/[0.08] rounded-[28px]'
                   }`}>
-                    
+
                     {isPopular && (
-                      <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-wider glow-indigo-sm flex items-center gap-1.5 whitespace-nowrap">
+                      <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-wider flex items-center gap-1.5 whitespace-nowrap shadow-[0_0_20px_rgba(99,102,241,0.4)]">
                         <Star size={12} fill="currentColor" /> Most Popular
                       </div>
                     )}
@@ -165,15 +147,15 @@ export default function Pricing() {
                     <div className="mb-6">
                       <h3 className="text-xl font-semibold text-white mb-2">{plan.name}</h3>
                       <div className="flex items-baseline gap-1 mb-2">
-                        <span className="text-5xl font-black text-white">${plan.price}</span>
-                        <span className="text-slate-400 text-sm font-medium">/mo</span>
+                        <span className="text-5xl font-black text-white">${price}</span>
+                        {plan.monthlyPrice !== '0' && (
+                          <span className="text-slate-400 text-sm font-medium">/mo</span>
+                        )}
                       </div>
                       {isPopular ? (
                         <p className="text-slate-500 text-xs mb-4">14-day free trial · No credit card</p>
-                      ) : plan.isTeams ? (
-                        <p className="text-slate-500 text-xs mb-4">Custom pricing available</p>
                       ) : (
-                        <p className="text-slate-500 text-xs mb-4 invisible">Spacer</p>
+                        <p className="text-slate-500 text-xs mb-4 invisible">–</p>
                       )}
                       <p className="text-slate-400 text-sm">{plan.description}</p>
                     </div>
@@ -182,11 +164,9 @@ export default function Pricing() {
                       <ul className="space-y-4">
                         {plan.features.map((feature, i) => (
                           <li key={i} className="flex items-start gap-3 text-sm">
-                            <Check 
-                              size={18} 
-                              className={`shrink-0 mt-0.5 ${
-                                isPopular ? 'text-indigo-400' : 'text-slate-400/50'
-                              }`} 
+                            <Check
+                              size={18}
+                              className={`shrink-0 mt-0.5 ${isPopular ? 'text-indigo-400' : 'text-slate-500'}`}
                             />
                             <span className={isPopular ? 'text-slate-200' : 'text-slate-400'}>
                               {feature}
@@ -200,9 +180,7 @@ export default function Pricing() {
                       className={`w-full py-4 rounded-full font-semibold transition-all duration-200 mt-auto ${
                         isPopular
                           ? 'bg-gradient-to-r from-indigo-500 to-violet-600 text-white hover:brightness-110 shadow-[0_0_20px_rgba(99,102,241,0.3)] hover:shadow-[0_0_30px_rgba(99,102,241,0.5)]'
-                          : plan.isTeams
-                            ? 'bg-white/[0.04] border border-white/15 text-white hover:bg-white/8'
-                            : 'bg-white/[0.04] border border-white/10 text-white hover:bg-white/8'
+                          : 'bg-white/[0.04] border border-white/10 text-white hover:bg-white/[0.08]'
                       }`}
                     >
                       {plan.buttonText}
@@ -214,8 +192,28 @@ export default function Pricing() {
           })}
         </div>
 
-        {/* Social Proof Row */}
-        <motion.div 
+        {/* Team Plans Coming Soon */}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ delay: 0.3 }}
+          className="flex justify-center mb-16"
+        >
+          <div className="flex items-center gap-3 px-5 py-3 rounded-2xl bg-white/[0.03] border border-white/[0.08] text-sm text-slate-400">
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20">
+              <Users size={15} className="text-violet-400" />
+            </div>
+            <span>
+              <span className="text-white font-medium">Team plans</span>
+              {' '}for career coaches &amp; agencies —{' '}
+              <span className="text-violet-400 font-medium">coming soon</span>
+            </span>
+          </div>
+        </motion.div>
+
+        {/* Social Proof */}
+        <motion.div
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}

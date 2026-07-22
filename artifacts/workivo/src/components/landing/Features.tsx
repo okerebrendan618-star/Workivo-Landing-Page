@@ -1,42 +1,27 @@
 import { motion } from 'framer-motion';
-import { Sparkles, Target, FileText, Search, Copy, Zap, ArrowRight } from 'lucide-react';
+import { Target, Sparkles, LayoutList, ArrowRight } from 'lucide-react';
 
 const features = [
   {
-    icon: Sparkles,
-    title: 'AI Resume Optimization',
-    description: 'Instantly rewrites your resume to match any job description with precision.',
-    gradient: 'from-indigo-500 to-violet-500'
-  },
-  {
     icon: Target,
-    title: 'ATS Score Checker',
-    description: 'Know your score before you apply. Beat the bots every time.',
-    gradient: 'from-violet-500 to-purple-500'
+    title: 'AI ATS Resume Scanner',
+    description: 'Paste a job description and instantly see your ATS compatibility score. Get clear, actionable suggestions to fix gaps before you apply.',
+    gradient: 'from-indigo-500 to-violet-500',
+    bullets: ['ATS compatibility score', 'Keyword gap analysis', 'Improvement suggestions'],
   },
   {
-    icon: FileText,
-    title: 'Tailored Cover Letters',
-    description: 'One click. A cover letter written for this exact job and company.',
-    gradient: 'from-purple-500 to-pink-500'
+    icon: Sparkles,
+    title: 'AI Resume Tailor',
+    description: 'Automatically rewrites and customises your resume to match any job description — improving keyword relevance so your application rises to the top.',
+    gradient: 'from-violet-500 to-purple-500',
+    bullets: ['Job-specific customisation', 'Keyword matching', 'Relevance optimisation'],
   },
   {
-    icon: Search,
-    title: 'Job Description Analyzer',
-    description: 'Extracts keywords, skills, and priorities from any job posting.',
-    gradient: 'from-cyan-500 to-indigo-500'
-  },
-  {
-    icon: Copy,
-    title: 'Multiple Resume Versions',
-    description: 'Save and manage tailored resumes for different roles and industries.',
-    gradient: 'from-emerald-500 to-cyan-500'
-  },
-  {
-    icon: Zap,
-    title: 'Instant Results',
-    description: 'No waiting. Your optimized resume is ready in seconds, not hours.',
-    gradient: 'from-orange-500 to-rose-500'
+    icon: LayoutList,
+    title: 'Job Application Tracker',
+    description: 'Keep every application organised in one place. Track which jobs you\'ve applied to, where they stand, and what comes next.',
+    gradient: 'from-cyan-500 to-indigo-500',
+    bullets: ['Application status tracking', 'Progress overview', 'Organised pipeline'],
   },
 ];
 
@@ -45,7 +30,7 @@ const containerVariants = {
   visible: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.1,
+      staggerChildren: 0.12,
     },
   },
 };
@@ -64,7 +49,7 @@ const itemVariants = {
 export default function Features() {
   return (
     <section id="features" className="py-24 md:py-32 relative">
-      {/* Subtle top left glow */}
+      {/* Glow */}
       <div className="absolute top-[20%] left-[10%] w-[400px] h-[400px] bg-indigo-600/10 rounded-full blur-[100px] pointer-events-none mix-blend-screen z-0" />
 
       <div className="max-w-7xl mx-auto px-6 relative z-10">
@@ -75,7 +60,7 @@ export default function Features() {
             viewport={{ once: true }}
             className="inline-block px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold tracking-widest uppercase mb-6"
           >
-            Features
+            What's Available Now
           </motion.div>
           <motion.h2
             initial={{ opacity: 0, y: 10 }}
@@ -84,7 +69,7 @@ export default function Features() {
             transition={{ delay: 0.1 }}
             className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-6"
           >
-            Everything you need to get hired
+            Three tools. Real results.
           </motion.h2>
           <motion.p
             initial={{ opacity: 0, y: 10 }}
@@ -93,7 +78,7 @@ export default function Features() {
             transition={{ delay: 0.2 }}
             className="text-lg text-slate-400"
           >
-            Stop sending generic resumes. Start sending the right one.
+            Everything you need to get interviews — built, shipped, and ready to use today.
           </motion.p>
         </div>
 
@@ -101,8 +86,8 @@ export default function Features() {
           variants={containerVariants}
           initial="hidden"
           whileInView="visible"
-          viewport={{ once: true, margin: "-100px" }}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8"
+          viewport={{ once: true, margin: '-100px' }}
+          className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8"
         >
           {features.map((feature, index) => (
             <motion.div
@@ -113,14 +98,24 @@ export default function Features() {
               <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-6 shadow-lg`}>
                 <feature.icon className="w-5 h-5 text-white" />
               </div>
-              <h3 className="text-lg font-semibold text-white mb-2">
+              <h3 className="text-lg font-semibold text-white mb-3">
                 {feature.title}
               </h3>
-              <p className="text-slate-400 text-sm leading-relaxed flex-grow">
+              <p className="text-slate-400 text-sm leading-relaxed flex-grow mb-6">
                 {feature.description}
               </p>
-              
-              <div className="mt-6 flex items-center gap-2 text-indigo-400 text-sm font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+
+              {/* Bullet points */}
+              <ul className="space-y-2 mb-6">
+                {feature.bullets.map((b, i) => (
+                  <li key={i} className="flex items-center gap-2 text-xs text-slate-500">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500/60 shrink-0" />
+                    {b}
+                  </li>
+                ))}
+              </ul>
+
+              <div className="flex items-center gap-2 text-indigo-400 text-sm font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                 Learn more <ArrowRight size={14} />
               </div>
             </motion.div>
