@@ -13,10 +13,8 @@ export default function Pricing() {
       description: 'Perfect for casual job seekers.',
       features: [
         '3 ATS resume scans / month',
-        '3 resume tailors / month',
-        'Basic job application tracker',
-        'PDF export',
-        'Community support',
+        '3 AI resume tailors / month',
+        'Basic job application tracking',
       ],
       buttonText: 'Get Started Free',
       isPopular: false,
@@ -28,13 +26,11 @@ export default function Pricing() {
       description: 'For serious job seekers who want results.',
       features: [
         'Unlimited ATS resume scans',
-        'Unlimited resume tailoring',
-        'Full job application tracker',
-        'Priority AI processing',
-        'Early access to new features',
-        '24/7 email support',
+        'Unlimited AI resume tailoring',
+        'Advanced job application tracking',
+        'Future AI features as they are released',
       ],
-      buttonText: 'Start Free Trial',
+      buttonText: 'Get Started',
       isPopular: true,
     },
   ];
@@ -152,11 +148,7 @@ export default function Pricing() {
                           <span className="text-slate-400 text-sm font-medium">/mo</span>
                         )}
                       </div>
-                      {isPopular ? (
-                        <p className="text-slate-500 text-xs mb-4">14-day free trial · No credit card</p>
-                      ) : (
-                        <p className="text-slate-500 text-xs mb-4 invisible">–</p>
-                      )}
+                      <p className="text-slate-500 text-xs mb-4 invisible">–</p>
                       <p className="text-slate-400 text-sm">{plan.description}</p>
                     </div>
 
