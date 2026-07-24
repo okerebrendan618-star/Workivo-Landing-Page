@@ -63,7 +63,7 @@ export default function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
           className="mt-10 flex flex-col sm:flex-row items-center gap-4 sm:gap-6 w-full sm:w-auto"
-        <button
+        <button></button>
   onClick={() => setLocation('/signup')}
   className="w-full sm:w-auto px-8 py-4 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-base font-semibold hover:brightness-110 transition-all shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-[1.02] transform duration-200"
 >
