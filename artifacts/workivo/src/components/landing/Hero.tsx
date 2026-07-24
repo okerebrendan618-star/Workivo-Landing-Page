@@ -58,26 +58,28 @@ export default function Hero() {
         </motion.p>
 
         {/* CTAs */}
-        <motion.div></motion.div>
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.3 }}
-          className="mt-10 flex flex-col sm:flex-row items-center gap-4 sm:gap-6 w-full sm:w-auto"
-        <button></button>
-  onClick={() => setLocation('/signup')}
-  className="w-full sm:w-auto px-8 py-4 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-base font-semibold hover:brightness-110 transition-all shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-[1.02] transform duration-200"
+<motion.div
+  initial={{ opacity: 0, y: 20 }}
+  animate={{ opacity: 1, y: 0 }}
+  transition={{ duration: 0.5, delay: 0.3 }}
+  className="mt-10 flex flex-col sm:flex-row items-center gap-4 sm:gap-6 w-full sm:w-auto"
 >
-  Get Started Free
-</button>
-            
-          
-          <button className="w-full sm:w-auto px-8 py-4 rounded-full bg-white/[0.04] border border-white/15 text-white text-base font-semibold hover:bg-white/8 transition-all flex items-center justify-center gap-3 backdrop-blur-sm group">
-            <div className="w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center">
-              <Play size={12} className="text-indigo-400 fill-current" />
-            </div>
-            Watch 60 Second Demo
-          </button>
-        </motion.div>
+  <button
+    onClick={() => setLocation('/signup')}
+    className="w-full sm:w-auto px-8 py-4 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-base font-semibold hover:brightness-110 transition-all shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-[1.02] transform duration-200"
+  >
+    Get Started Free
+  </button>
+
+  <button
+    className="w-full sm:w-auto px-8 py-4 rounded-full bg-white/[0.04] border border-white/15 text-white text-base font-semibold hover:bg-white/8 transition-all flex items-center justify-center gap-3 backdrop-blur-sm group"
+  >
+    <div className="w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center">
+      <Play size={12} className="text-indigo-400 fill-current" />
+    </div>
+    Watch 60 Second Demo
+  </button>
+</motion.div>
 
         {/* Trust Badges */}
         <motion.div
