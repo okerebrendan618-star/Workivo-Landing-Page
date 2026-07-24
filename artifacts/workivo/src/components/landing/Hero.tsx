@@ -1,8 +1,13 @@
 import { motion } from 'framer-motion';
 import { Play, ShieldCheck, Lock, Zap, ArrowRight } from 'lucide-react';
+import { useLocation } from 'wouter';
+
 
 export default function Hero() {
+  const [, setLocation] = useLocation();
+
   return (
+  
     <section className="relative min-h-[100dvh] flex flex-col items-center justify-center pt-32 pb-20 overflow-hidden">
       {/* Background glow effects */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[700px] h-[500px] rounded-full bg-indigo-600/15 blur-[140px] pointer-events-none mix-blend-screen" />
@@ -58,10 +63,14 @@ export default function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
           className="mt-10 flex flex-col sm:flex-row items-center gap-4 sm:gap-6 w-full sm:w-auto"
-        >
-          <button className="w-full sm:w-auto px-8 py-4 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-base font-semibold hover:brightness-110 transition-all shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-[1.02] transform duration-200">
-            Get Started Free
-          </button>
+        <button
+  onClick={() => setLocation('/signup')}
+  className="w-full sm:w-auto px-8 py-4 rounded-full bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-base font-semibold hover:brightness-110 transition-all shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-[1.02] transform duration-200"
+>
+  Get Started Free
+</button>
+            
+          
           <button className="w-full sm:w-auto px-8 py-4 rounded-full bg-white/[0.04] border border-white/15 text-white text-base font-semibold hover:bg-white/8 transition-all flex items-center justify-center gap-3 backdrop-blur-sm group">
             <div className="w-6 h-6 rounded-full bg-indigo-500/20 flex items-center justify-center">
               <Play size={12} className="text-indigo-400 fill-current" />
