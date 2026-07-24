@@ -57,7 +57,7 @@ export default function Hero() {
           The AI co-pilot that rewrites your resume, beats ATS filters, and writes your cover letter — in under 10 seconds.
         </motion.p>
 
-        {/* CTAs */}
+        /* CTAs */}
 <motion.div
   initial={{ opacity: 0, y: 20 }}
   animate={{ opacity: 1, y: 0 }}
@@ -79,7 +79,7 @@ export default function Hero() {
     </div>
     Watch 60 Second Demo
   </button>
-</motion.div>
+
 
         {/* Trust Badges */}
         <motion.div
