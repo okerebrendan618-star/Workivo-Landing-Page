@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import Landing from '@/pages/Landing';
+import Dashboard from '@/pages/Dashboard';
 import Signup from '@/pages/Signup';
 import NotFound from '@/pages/not-found';
 
@@ -15,6 +16,7 @@ function App() {
       <Switch>
   <Route path="/" component={Landing} />
   <Route path="/signup" component={Signup} />
+  <Route path="/dashboard" component={Dashboard} />
   <Route component={NotFound} />
 </Switch>
         
