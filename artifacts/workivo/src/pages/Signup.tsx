@@ -11,17 +11,20 @@ export default function Signup() {
   const [message, setMessage] = useState("");
 
   async function handleSignup() {
-    setLoading(true);
-    setMessage("");
+  setLoading(true);
+  setMessage("");
 
-    const { error } = await supabase.auth.signUp({
+  try {
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
     });
 
+    console.log("Signup data:", data);
+    console.log("Signup error:", error);
+
     if (error) {
       setMessage(error.message);
-      setLoading(false);
       return;
     }
 
@@ -30,9 +33,13 @@ export default function Signup() {
     setTimeout(() => {
       setLocation("/dashboard");
     }, 1000);
-
+  } catch (err) {
+    console.error(err);
+    setMessage(err instanceof Error ? err.message : "Unexpected error");
+  } finally {
     setLoading(false);
   }
+}
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center px-6">
