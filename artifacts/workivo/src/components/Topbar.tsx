@@ -16,10 +16,12 @@ export default function Topbar({ email, onLogout }: TopbarProps) {
       : "Good Evening 🌙";
 
   const firstName =
-    email
-      .split("@")[0]
-      .split(/[._0-9]/)[0]
-      .replace(/^./, (c) => c.toUpperCase());
+  email
+    ? email
+        .split("@")[0]
+        .split(/[._0-9]/)[0]
+        .replace(/^./, (c) => c.toUpperCase())
+    : "User";
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#09090f]/80 backdrop-blur-xl">
