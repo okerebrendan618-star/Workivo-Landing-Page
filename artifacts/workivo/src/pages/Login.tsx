@@ -2,7 +2,7 @@ import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useLocation } from "wouter";
 
-export default function Signup() {
+export default function Login() {
   const [, setLocation] = useLocation();
 
   const [email, setEmail] = useState("");
@@ -10,47 +10,52 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  async function handleSignup() {
-  setLoading(true);
-  setMessage("");
+  async function handleLogin() {
+    setLoading(true);
+    setMessage("");
 
-  try {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    try {
+      const { data, error } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-    console.log("Signup data:", data);
-    console.log("Signup error:", error);
+      console.log("Login data:", data);
+      console.log("Login error:", error);
 
-    if (error) {
-      setMessage(error.message);
-      return;
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+
+      setMessage("Login successful!");
+
+      setTimeout(() => {
+        setLocation("/dashboard");
+      }, 1000);
+
+    } catch (err) {
+      console.error(err);
+      setMessage(
+        err instanceof Error ? err.message : "Unexpected error"
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setMessage("Account created successfully!");
-
-    setTimeout(() => {
-      setLocation("/dashboard");
-    }, 1000);
-  } catch (err) {
-    console.error(err);
-    setMessage(err instanceof Error ? err.message : "Unexpected error");
-  } finally {
-    setLoading(false);
   }
-}
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center px-6">
+
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#111119] p-8 shadow-xl">
 
         <h1 className="text-3xl font-bold text-white mb-2">
-          Create your account
+          Welcome back
         </h1>
 
         <p className="text-slate-400 mb-8">
-          Welcome to Workivo. Let's get you hired faster.
+          Sign in to continue building your career with Workivo.
         </p>
 
         <div className="space-y-4">
@@ -72,12 +77,29 @@ export default function Signup() {
           />
 
           <button
-            onClick={handleSignup}
+            onClick={handleLogin}
             disabled={loading}
             className="w-full rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-500 transition disabled:opacity-50"
           >
-            {loading ? "Creating Account..." : "Create Account"}
+            {loading ? "Signing In..." : "Sign In"}
           </button>
+
+          <div className="flex justify-between text-sm">
+
+            <button
+              onClick={() => setLocation("/signup")}
+              className="text-indigo-400 hover:text-indigo-300 transition"
+            >
+              Create an account
+            </button>
+
+            <button
+              className="text-slate-400 hover:text-white transition"
+            >
+              Forgot Password?
+            </button>
+
+          </div>
 
           {message && (
             <p className="text-sm text-slate-300 text-center">
@@ -86,7 +108,9 @@ export default function Signup() {
           )}
 
         </div>
+
       </div>
+
     </div>
   );
 }
