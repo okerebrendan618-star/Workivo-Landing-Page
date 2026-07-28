@@ -7,54 +7,282 @@ import {
   Crown,
   CheckCircle2,
   Zap,
+  Bot,
+  Activity,
+  ArrowUpRight,
 } from "lucide-react";
 
 export default function DashboardContent() {
   return (
     <main className="space-y-8">
 
-      {/* Hero */}
+      {/* HERO */}
 
-      <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-600/30 via-purple-600/20 to-pink-600/10 p-8 shadow-2xl">
+      <section className="relative overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-indigo-600/30 via-purple-600/20 to-pink-600/10 p-8 shadow-2xl">
 
-        <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-purple-500/20 blur-3xl" />
+        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-purple-500/20 blur-3xl" />
+
+        <div className="absolute bottom-0 left-0 h-32 w-full bg-gradient-to-t from-black/20 to-transparent" />
 
         <div className="relative z-10">
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
 
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 backdrop-blur">
 
-              <Sparkles className="h-6 w-6 text-indigo-300" />
+              <Sparkles className="h-7 w-7 text-indigo-300" />
 
             </div>
 
             <div>
 
-              <p className="text-sm text-indigo-200">
-                AI Career Assistant
-              </p>
+              <div className="mb-2 inline-flex items-center rounded-full border border-indigo-400/30 bg-indigo-500/20 px-3 py-1 text-xs font-semibold text-indigo-200">
+
+                ✨ Workivo AI v2.0
+
+              </div>
 
               <h2 className="text-3xl font-bold text-white">
+
                 Your Resume Co-pilot is ready 🚀
+
               </h2>
 
             </div>
 
           </div>
 
+          <p className="mt-6 max-w-2xl text-slate-300 leading-7">
 
-          <p className="mt-5 max-w-2xl text-slate-300">
-
-            Upload your resume and let Workivo analyze your ATS score,
-            improve your content, and match you with better opportunities.
+            Upload your resume and let Workivo analyse your ATS score,
+            optimise your content and match you with better career opportunities.
 
           </p>
 
+          <div className="mt-8 flex flex-wrap gap-4">
 
-          <button className="mt-8 flex items-center gap-3 rounded-2xl bg-white px-6 py-3 font-semibold text-indigo-700 transition hover:scale-105">
+            <button className="flex items-center gap-3 rounded-2xl bg-white px-7 py-3 font-semibold text-indigo-700 transition hover:scale-105">
 
-            <UploadCloud className="h-5 w-5" />
+              <UploadCloud className="h-5 w-5" />
+
+              Upload Resume
+
+            </button>
+
+            <button className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-7 py-3 font-semibold text-white transition hover:bg-white/10">
+
+              <ArrowUpRight className="h-5 w-5" />
+
+              View Career Insights
+
+            </button>
+
+          </div>
+
+          <div className="mt-8 grid gap-4 md:grid-cols-3">
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+
+              <p className="text-xs uppercase tracking-widest text-slate-500">
+
+                Last Upload
+
+              </p>
+
+              <p className="mt-2 text-white font-semibold">
+
+                No resume uploaded
+
+              </p>
+
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+
+              <p className="text-xs uppercase tracking-widest text-slate-500">
+
+                ATS Status
+
+              </p>
+
+              <p className="mt-2 text-white font-semibold">
+
+                Waiting for first scan
+
+              </p>
+
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+
+              <p className="text-xs uppercase tracking-widest text-slate-500">
+
+                AI Assistant
+
+              </p>
+
+              <p className="mt-2 text-emerald-400 font-semibold">
+
+                Ready to help
+
+              </p>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      {/* Premium Stats */}
+
+      <section className="grid gap-6 md:grid-cols-3">
+
+        {/* ATS Score */}
+
+        <div className="group rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl transition duration-300 hover:-translate-y-2 hover:border-indigo-500/40 hover:shadow-[0_0_40px_rgba(99,102,241,0.25)]">
+
+          <div className="flex items-center justify-between">
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/20">
+
+              <FileText className="h-6 w-6 text-indigo-400" />
+
+            </div>
+
+            <span className="rounded-full bg-indigo-500/20 px-3 py-1 text-xs font-semibold text-indigo-300">
+
+              ATS SCORE
+
+            </span>
+
+          </div>
+
+          <h2 className="mt-6 text-5xl font-black text-white">
+            0%
+          </h2>
+
+          <p className="mt-2 text-slate-400">
+            Upload a resume to receive your first ATS score.
+          </p>
+
+          <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+
+            <div className="h-full w-0 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+
+          </div>
+
+        </div>
+
+
+
+        {/* Resume Tailored */}
+
+        <div className="group rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl transition duration-300 hover:-translate-y-2 hover:border-purple-500/40 hover:shadow-[0_0_40px_rgba(168,85,247,0.25)]">
+
+          <div className="flex items-center justify-between">
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-500/20">
+
+              <Sparkles className="h-6 w-6 text-purple-400" />
+
+            </div>
+
+            <span className="rounded-full bg-purple-500/20 px-3 py-1 text-xs font-semibold text-purple-300">
+
+              RESUMES
+
+            </span>
+
+          </div>
+
+          <h2 className="mt-6 text-5xl font-black text-white">
+            0
+          </h2>
+
+          <p className="mt-2 text-slate-400">
+            AI Tailored Resumes Generated
+          </p>
+
+          <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+
+            <div className="h-full w-0 rounded-full bg-gradient-to-r from-purple-500 to-pink-500"></div>
+
+          </div>
+
+        </div>
+
+
+
+        {/* Applications */}
+
+        <div className="group rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl transition duration-300 hover:-translate-y-2 hover:border-emerald-500/40 hover:shadow-[0_0_40px_rgba(34,197,94,0.25)]">
+
+          <div className="flex items-center justify-between">
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/20">
+
+              <TrendingUp className="h-6 w-6 text-emerald-400" />
+
+            </div>
+
+            <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300">
+
+              APPLICATIONS
+
+            </span>
+
+          </div>
+
+          <h2 className="mt-6 text-5xl font-black text-white">
+            0
+          </h2>
+
+          <p className="mt-2 text-slate-400">
+            Active Job Applications
+          </p>
+
+          <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+
+            <div className="h-full w-0 rounded-full bg-gradient-to-r from-emerald-500 to-green-400"></div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+
+      {/* Resume Upload */}
+
+      <section className="rounded-3xl border border-dashed border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 to-purple-500/5 p-10">
+
+        <div className="flex flex-col items-center text-center">
+
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-indigo-500/20">
+
+            <UploadCloud className="h-10 w-10 text-indigo-300" />
+
+          </div>
+
+          <h2 className="mt-6 text-3xl font-bold text-white">
+
+            Drop your resume here
+
+          </h2>
+
+          <p className="mt-3 max-w-xl text-slate-400">
+
+            Supports PDF and DOCX files.
+            Our AI instantly analyses your resume,
+            calculates your ATS score,
+            and suggests improvements.
+
+          </p>
+
+          <button className="mt-8 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 px-8 py-4 font-semibold text-white transition hover:scale-105">
 
             Upload Resume
 
@@ -64,86 +292,110 @@ export default function DashboardContent() {
 
       </section>
 
+      {/* Recent Activity */}
 
+      <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur-xl">
 
-      {/* Stats */}
+        <div className="flex items-center gap-3">
 
-      <section className="grid gap-6 md:grid-cols-3">
+          <Activity className="h-6 w-6 text-indigo-400" />
 
+          <h2 className="text-xl font-bold text-white">
 
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+            Recent Activity
 
-          <div className="flex items-center justify-between">
-
-            <FileText className="h-6 w-6 text-indigo-400" />
-
-            <span className="text-sm text-slate-400">
-              ATS
-            </span>
-
-          </div>
-
-
-          <h3 className="mt-6 text-4xl font-bold text-white">
-            0%
-          </h3>
-
-          <p className="mt-2 text-slate-400">
-            Resume compatibility
-          </p>
+          </h2>
 
         </div>
 
 
-
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
-
-          <div className="flex items-center justify-between">
-
-            <Briefcase className="h-6 w-6 text-purple-400" />
-
-            <span className="text-sm text-slate-400">
-              Matches
-            </span>
-
-          </div>
+        <div className="mt-6 space-y-4">
 
 
-          <h3 className="mt-6 text-4xl font-bold text-white">
-            0
-          </h3>
+          <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4">
 
-          <p className="mt-2 text-slate-400">
-            Recommended jobs
-          </p>
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/20">
 
-        </div>
+              <UploadCloud className="h-5 w-5 text-indigo-300" />
 
+            </div>
 
+            <div>
 
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+              <p className="font-medium text-white">
 
-          <div className="flex items-center justify-between">
+                Resume uploaded
 
-            <TrendingUp className="h-6 w-6 text-green-400" />
+              </p>
 
-            <span className="text-sm text-slate-400">
-              Applications
-            </span>
+              <p className="text-sm text-slate-400">
+
+                Waiting for your first ATS analysis
+
+              </p>
+
+            </div>
 
           </div>
 
 
-          <h3 className="mt-6 text-4xl font-bold text-white">
-            0
-          </h3>
 
-          <p className="mt-2 text-slate-400">
-            Jobs tracked
-          </p>
+          <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20">
+
+              <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+
+            </div>
+
+            <div>
+
+              <p className="font-medium text-white">
+
+                ATS scan completed
+
+              </p>
+
+              <p className="text-sm text-slate-400">
+
+                Your resume score will appear here
+
+              </p>
+
+            </div>
+
+          </div>
+
+
+
+          <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20">
+
+              <Sparkles className="h-5 w-5 text-purple-400" />
+
+            </div>
+
+            <div>
+
+              <p className="font-medium text-white">
+
+                Resume tailored
+
+              </p>
+
+              <p className="text-sm text-slate-400">
+
+                AI improvements ready
+
+              </p>
+
+            </div>
+
+          </div>
+
 
         </div>
-
 
       </section>
 
@@ -151,18 +403,31 @@ export default function DashboardContent() {
 
       {/* AI Suggestions */}
 
-      <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur-xl">
+      <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 to-white/5 p-8 backdrop-blur-xl">
 
 
         <div className="flex items-center gap-3">
 
           <Zap className="h-6 w-6 text-yellow-400" />
 
-          <h2 className="text-xl font-bold text-white">
-            AI Suggestions
-          </h2>
+          <div>
+
+            <h2 className="text-xl font-bold text-white">
+
+              AI Career Suggestions
+
+            </h2>
+
+            <p className="text-sm text-slate-400">
+
+              Powered by Workivo intelligence
+
+            </p>
+
+          </div>
 
         </div>
+
 
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -177,14 +442,22 @@ export default function DashboardContent() {
 
             <div
               key={item}
-              className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 p-4"
+              className="group flex items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-5 transition hover:border-indigo-500/40 hover:bg-indigo-500/10"
             >
 
-              <CheckCircle2 className="h-5 w-5 text-green-400" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-500/20">
 
-              <p className="text-slate-300">
+                <CheckCircle2 className="h-5 w-5 text-green-400" />
+
+              </div>
+
+
+              <p className="text-slate-300 group-hover:text-white transition">
+
                 {item}
+
               </p>
+
 
             </div>
 
@@ -193,18 +466,17 @@ export default function DashboardContent() {
 
         </div>
 
+
       </section>
 
-
-
-
-      {/* Credits + Upgrade */}
-
+      {/* Plan Section */}
 
       <section className="grid gap-6 lg:grid-cols-2">
 
 
-        <div className="rounded-3xl border border-indigo-500/30 bg-indigo-500/10 p-8">
+        {/* Free Plan */}
+
+        <div className="rounded-3xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/20 to-purple-500/10 p-8 backdrop-blur-xl">
 
 
           <div className="flex items-center gap-3">
@@ -212,7 +484,9 @@ export default function DashboardContent() {
             <Sparkles className="h-6 w-6 text-indigo-300" />
 
             <h2 className="text-xl font-bold text-white">
+
               Free Plan
+
             </h2>
 
           </div>
@@ -220,26 +494,66 @@ export default function DashboardContent() {
 
           <p className="mt-4 text-slate-300">
 
-            You have access to:
+            Everything you need to start improving your career.
 
           </p>
 
 
-          <ul className="mt-4 space-y-3 text-slate-200">
 
-            <li>
-              ✓ 3 ATS scans
-            </li>
+          <div className="mt-6 space-y-3">
 
-            <li>
-              ✓ 3 AI resume improvements
-            </li>
 
-            <li>
-              ✓ Job matching preview
-            </li>
+            {[
+              "3 ATS resume scans",
+              "3 AI resume improvements",
+              "Job matching preview",
+              "Career suggestions",
+            ].map((item) => (
 
-          </ul>
+              <div
+                key={item}
+                className="flex items-center gap-3 text-slate-200"
+              >
+
+                <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+
+                {item}
+
+              </div>
+
+            ))}
+
+
+          </div>
+
+
+          <div className="mt-8 rounded-2xl border border-white/10 bg-black/20 p-4">
+
+
+            <p className="text-sm text-slate-400">
+
+              Monthly AI Credits
+
+            </p>
+
+
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+
+
+              <div className="h-full w-[30%] rounded-full bg-gradient-to-r from-indigo-500 to-purple-500" />
+
+
+            </div>
+
+
+            <p className="mt-2 text-xs text-slate-400">
+
+              30% used
+
+            </p>
+
+
+          </div>
 
 
         </div>
@@ -247,38 +561,103 @@ export default function DashboardContent() {
 
 
 
-        <div className="rounded-3xl border border-yellow-500/30 bg-gradient-to-br from-yellow-500/20 to-orange-500/10 p-8">
+        {/* Upgrade */}
+
+        <div className="relative overflow-hidden rounded-3xl border border-yellow-500/30 bg-gradient-to-br from-yellow-500/20 via-orange-500/10 to-transparent p-8">
 
 
-          <div className="flex items-center gap-3">
+          <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-yellow-400/20 blur-3xl" />
 
-            <Crown className="h-6 w-6 text-yellow-400" />
 
-            <h2 className="text-xl font-bold text-white">
-              Upgrade to Pro
-            </h2>
+          <div className="relative">
+
+
+            <div className="flex items-center gap-3">
+
+
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-yellow-400/20">
+
+                <Crown className="h-6 w-6 text-yellow-400" />
+
+              </div>
+
+
+              <h2 className="text-xl font-bold text-white">
+
+                Upgrade to Pro
+
+              </h2>
+
+
+            </div>
+
+
+
+            <p className="mt-5 text-slate-300">
+
+              Unlock unlimited AI career tools and maximize your chances of getting hired.
+
+            </p>
+
+
+
+            <ul className="mt-6 space-y-3">
+
+
+              {[
+                "Unlimited ATS scans",
+                "Advanced AI resume rewriting",
+                "Smart job matching",
+                "Priority AI assistance",
+              ].map((item) => (
+
+                <li
+                  key={item}
+                  className="flex items-center gap-3 text-slate-200"
+                >
+
+                  <CheckCircle2 className="h-5 w-5 text-yellow-400" />
+
+                  {item}
+
+                </li>
+
+              ))}
+
+
+            </ul>
+
+
+
+            <button className="mt-8 rounded-2xl bg-yellow-400 px-8 py-3 font-bold text-black transition hover:scale-105 hover:bg-yellow-300">
+
+              Upgrade Now
+
+            </button>
+
 
           </div>
-
-
-          <p className="mt-4 text-slate-300">
-
-            Unlock unlimited AI career tools and get hired faster.
-
-          </p>
-
-
-          <button className="mt-6 rounded-2xl bg-yellow-400 px-6 py-3 font-semibold text-black transition hover:scale-105">
-
-            Upgrade Now
-
-          </button>
 
 
         </div>
 
 
       </section>
+
+
+
+
+      {/* Floating AI Assistant */}
+
+      <button
+        className="fixed bottom-8 right-8 z-50 flex items-center gap-3 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 font-semibold text-white shadow-2xl shadow-indigo-500/40 transition hover:scale-110"
+      >
+
+        <Bot className="h-5 w-5" />
+
+        Ask Workivo AI
+
+      </button>
 
 
     </main>
