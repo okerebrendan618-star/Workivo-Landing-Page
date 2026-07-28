@@ -1,7 +1,6 @@
 import {
   FileText,
   Sparkles,
-  Briefcase,
   TrendingUp,
   UploadCloud,
   Crown,
@@ -12,7 +11,25 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 
+import { useRef } from "react";
+
 export default function DashboardContent() {
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    console.log("Selected resume:", file);
+
+    // Next step:
+    // Upload file to Supabase Storage
+  };
   return (
     <main className="space-y-8">
 
@@ -282,11 +299,23 @@ export default function DashboardContent() {
 
           </p>
 
-          <button className="mt-8 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 px-8 py-4 font-semibold text-white transition hover:scale-105">
+          <input
+  ref={fileInputRef}
+  type="file"
+  accept=".pdf,.doc,.docx"
+  className="hidden"
+  onChange={handleFileUpload}
+/>
 
-            Upload Resume
 
-          </button>
+<button
+  onClick={handleUploadClick}
+  className="mt-8 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 px-8 py-4 font-semibold text-white transition hover:scale-105"
+>
+
+  Upload Resume
+
+</button>
 
         </div>
 
