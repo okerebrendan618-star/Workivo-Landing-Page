@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { useRef } from "react";
+import { supabase } from "../lib/supabase";
 
 export default function DashboardContent() {
     const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -20,16 +21,29 @@ export default function DashboardContent() {
     fileInputRef.current?.click();
   };
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleFileUpload = async (
+  event: React.ChangeEvent<HTMLInputElement>
+) => {
+  const file = event.target.files?.[0];
 
-    if (!file) return;
+  if (!file) return;
 
-    console.log("Selected resume:", file);
+  const fileName = `${Date.now()}-${file.name}`;
 
-    // Next step:
-    // Upload file to Supabase Storage
-  };
+  const { data, error } = await supabase.storage
+    .from("resumes")
+    .upload(fileName, file);
+
+  if (error) {
+    console.error(error);
+    alert("Upload failed.");
+    return;
+  }
+
+  console.log("Upload successful:", data);
+
+  alert("Resume uploaded successfully!");
+};
   return (
     <main className="space-y-8">
 
