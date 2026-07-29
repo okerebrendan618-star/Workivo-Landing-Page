@@ -36,7 +36,8 @@ export default function DashboardContent() {
 
   if (error) {
     console.error(error);
-    alert("Upload failed.");
+
+alert(error.message);
     return;
   }
 
