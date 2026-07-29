@@ -78,13 +78,13 @@ export default function DashboardContent() {
 
           <div className="mt-8 flex flex-wrap gap-4">
 
-            <button className="flex items-center gap-3 rounded-2xl bg-white px-7 py-3 font-semibold text-indigo-700 transition hover:scale-105">
-
-              <UploadCloud className="h-5 w-5" />
-
-              Upload Resume
-
-            </button>
+            <button
+  onClick={handleUploadClick}
+  className="flex items-center gap-3 rounded-2xl bg-white px-7 py-3 font-semibold text-indigo-700 transition hover:scale-105"
+>
+  <UploadCloud className="h-5 w-5" />
+  Upload Resume
+</button>
 
             <button className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-7 py-3 font-semibold text-white transition hover:bg-white/10">
 
