@@ -267,12 +267,14 @@ alert("Resume uploaded and saved successfully!");
           </div>
 
          <h2 className="mt-6 text-5xl font-black text-white">
-  {resumeCount}
-</h2> 
+  {latestResume?.ats_score ?? 0}%
+</h2>
 
-          <p className="mt-2 text-slate-400">
-            Upload a resume to receive your first ATS score.
-          </p>
+<p className="mt-2 text-slate-400">
+  {latestResume?.ats_score
+    ? "Resume analysed successfully."
+    : "Upload a resume to receive your first ATS score."}
+</p>
 
           <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
 
