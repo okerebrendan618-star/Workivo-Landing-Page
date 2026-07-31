@@ -21,22 +21,13 @@ export default function DashboardContent() {
   const handleUploadClick = () => {
     fileInputRef.current?.click();
   };
-
-  const handleFileUpload = async (
-  event: React.ChangeEvent<HTMLInputElement>
-) => {
-  const file = event.target.files?.[0];
-
-  if (!file) return;
   useEffect(() => {
   const getLatestResume = async () => {
-
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) return;
-
 
     const { data, error } = await supabase
       .from("resumes")
@@ -46,21 +37,22 @@ export default function DashboardContent() {
       .limit(1)
       .single();
 
-
-    if (error) {
-      console.log(error);
-      return;
+    if (!error && data) {
+      setLatestResume(data);
     }
-
-
-    setLatestResume(data);
-
   };
 
-
   getLatestResume();
-
 }, []);
+
+  const handleFileUpload = async (
+  event: React.ChangeEvent<HTMLInputElement>
+) => {
+  const file = event.target.files?.[0];
+
+  if (!file) return;
+  
+    
 
   const fileName = `${Date.now()}-${file.name}`;
 
@@ -116,6 +108,8 @@ if (databaseError) {
 
 
 alert("Resume uploaded and saved successfully!");
+window.location.reload();
+   
 };
   return (
     <main className="space-y-8">
