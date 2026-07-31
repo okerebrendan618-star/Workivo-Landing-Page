@@ -119,8 +119,18 @@ setLatestResume({
 });
 setResumeCount((prev) => prev + 1);
 alert("Resume uploaded and saved successfully!");
+};
+const handleScanResume = async () => {
+  if (!latestResume) {
+    alert("Please upload a resume first.");
+    return;
+  }
 
-   
+  setIsScanning(true);
+
+  alert("AI Scan coming in the next step...");
+
+  setIsScanning(false);
 };
   return (
     <main className="space-y-8">
@@ -408,7 +418,14 @@ alert("Resume uploaded and saved successfully!");
   Upload Resume
 
 </button>
-
+          
+<button
+  onClick={handleScanResume}
+  disabled={isScanning}
+  className="mt-4 rounded-2xl bg-emerald-600 px-8 py-4 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+>
+  {isScanning ? "Scanning..." : "Scan Resume with AI"}
+</button>
         </div>
 
       </section>
