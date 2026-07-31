@@ -116,7 +116,7 @@ setLatestResume({
   file_name: fileName,
   file_url: urlData.publicUrl,
 });
-
+setResumeCount((prev) => prev + 1);
 alert("Resume uploaded and saved successfully!");
 
    
