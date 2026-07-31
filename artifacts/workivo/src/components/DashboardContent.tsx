@@ -11,10 +11,11 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 
-import { useRef } from "react";
+import { useRef, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 export default function DashboardContent() {
+  const [latestResume, setLatestResume] = useState<any>(null);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleUploadClick = () => {
@@ -27,6 +28,39 @@ export default function DashboardContent() {
   const file = event.target.files?.[0];
 
   if (!file) return;
+  useEffect(() => {
+  const getLatestResume = async () => {
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+
+    const { data, error } = await supabase
+      .from("resumes")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+
+    if (error) {
+      console.log(error);
+      return;
+    }
+
+
+    setLatestResume(data);
+
+  };
+
+
+  getLatestResume();
+
+}, []);
 
   const fileName = `${Date.now()}-${file.name}`;
 
@@ -160,10 +194,10 @@ alert("Resume uploaded and saved successfully!");
               </p>
 
               <p className="mt-2 text-white font-semibold">
-
-                No resume uploaded
-
-              </p>
+ {latestResume
+   ? latestResume.file_name
+   : "No resume uploaded"}
+</p>
 
             </div>
 
