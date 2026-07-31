@@ -17,6 +17,7 @@ import { supabase } from "../lib/supabase";
 export default function DashboardContent() {
   const [latestResume, setLatestResume] = useState<any>(null);
   const [resumeCount, setResumeCount] = useState(0);
+  const [isScanning, setIsScanning] = useState(false);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleUploadClick = () => {
