@@ -43,7 +43,45 @@ alert(error.message);
 
   console.log("Upload successful:", data);
 
-  alert("Resume uploaded successfully!");
+
+// Get logged in user
+const {
+  data: { user },
+} = await supabase.auth.getUser();
+
+
+if (!user) {
+  alert("Please login first");
+  return;
+}
+
+
+// Get uploaded file URL
+
+const { data: urlData } = supabase.storage
+  .from("resumes")
+  .getPublicUrl(fileName);
+
+
+// Save resume information
+
+const { error: databaseError } = await supabase
+  .from("resumes")
+  .insert({
+    user_id: user.id,
+    file_name: fileName,
+    file_url: urlData.publicUrl,
+  });
+
+
+if (databaseError) {
+  console.error(databaseError);
+  alert(databaseError.message);
+  return;
+}
+
+
+alert("Resume uploaded and saved successfully!");
 };
   return (
     <main className="space-y-8">
