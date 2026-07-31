@@ -16,6 +16,7 @@ import { supabase } from "../lib/supabase";
 
 export default function DashboardContent() {
   const [latestResume, setLatestResume] = useState<any>(null);
+  const [resumeCount, setResumeCount] = useState(0);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleUploadClick = () => {
@@ -40,6 +41,12 @@ export default function DashboardContent() {
     if (!error && data) {
       setLatestResume(data);
     }
+    const { count } = await supabase
+  .from("resumes")
+  .select("*", { count: "exact", head: true })
+  .eq("user_id", user.id);
+
+setResumeCount(count || 0);
   };
 
   getLatestResume();
@@ -207,10 +214,8 @@ alert("Resume uploaded and saved successfully!");
               </p>
 
               <p className="mt-2 text-white font-semibold">
-
-                Waiting for first scan
-
-              </p>
+  {resumeCount > 0 ? "Resume uploaded" : "Waiting for first scan"}
+</p>
 
             </div>
 
@@ -260,9 +265,9 @@ alert("Resume uploaded and saved successfully!");
 
           </div>
 
-          <h2 className="mt-6 text-5xl font-black text-white">
-            0%
-          </h2>
+         <h2 className="mt-6 text-5xl font-black text-white">
+  {resumeCount}
+</h2> 
 
           <p className="mt-2 text-slate-400">
             Upload a resume to receive your first ATS score.
