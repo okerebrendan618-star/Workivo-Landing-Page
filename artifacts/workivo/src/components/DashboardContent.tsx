@@ -105,10 +105,13 @@ if (databaseError) {
   alert(databaseError.message);
   return;
 }
-
+setLatestResume({
+  file_name: fileName,
+  file_url: urlData.publicUrl,
+});
 
 alert("Resume uploaded and saved successfully!");
-window.location.reload();
+
    
 };
   return (
