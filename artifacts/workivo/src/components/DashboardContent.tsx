@@ -169,24 +169,57 @@ export default function DashboardContent() {
   // AI SCAN BUTTON (EDGE FUNCTION NEXT)
   const handleScanResume = async () => {
 
-    if (!latestResume) {
+  if (!latestResume) {
+    alert("Please upload a resume first.");
+    return;
+  }
 
-      alert("Please upload a resume first.");
-
-      return;
-
-    }
-
-
-    setIsScanning(true);
+  setIsScanning(true);
 
 
-    alert("AI Scan coming next 🚀");
+  try {
+
+    const response = await fetch(MAKE_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+
+      body: JSON.stringify({
+
+        resume_text: latestResume.file_url,
+
+        job_description:
+        "Software developer role requiring skills and experience."
+
+      }),
+
+    });
 
 
-    setIsScanning(false);
+    const result = await response.json();
 
-  };
+
+    console.log("AI Result:", result);
+
+
+    alert(
+      `ATS Score: ${result.ats_score}%`
+    );
+
+
+  } catch(error){
+
+    console.error(error);
+
+    alert("AI scan failed");
+
+  }
+
+
+  setIsScanning(false);
+
+};
 
 
 
