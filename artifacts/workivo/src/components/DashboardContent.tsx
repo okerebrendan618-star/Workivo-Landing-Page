@@ -16,8 +16,11 @@ import { supabase } from "../lib/supabase";
 
 export default function DashboardContent() {
   const [latestResume, setLatestResume] = useState<any>(null);
-  const [resumeCount, setResumeCount] = useState(0);
-  const [isScanning, setIsScanning] = useState(false);
+const [resumeCount, setResumeCount] = useState(0);
+const [isScanning, setIsScanning] = useState(false);
+
+const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0577l";
+
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
