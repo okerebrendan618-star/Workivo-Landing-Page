@@ -13,6 +13,7 @@ import {
 
 import { useRef, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { extractPdfText } from "../lib/pdfReader";
 
 export default function DashboardContent() {
   const [latestResume, setLatestResume] = useState<any>(null);
@@ -85,7 +86,7 @@ const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0
 
 
     if (!file) return;
-
+    const resumeText = await extractPdfText(file);
 
 
     const fileName = `${Date.now()}-${file.name}`;
@@ -158,7 +159,10 @@ const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0
 
 
 
-    setLatestResume(insertedResume);
+    setLatestResume({
+  ...insertedResume,
+  resume_text: resumeText,
+});
 
     setResumeCount((prev) => prev + 1);
 
@@ -190,7 +194,7 @@ const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0
 
       body: JSON.stringify({
 
-        resume_text: latestResume.file_url,
+        resume_text: latestResume.resume_text,
 
         job_description:
         "Software developer role requiring skills and experience."
