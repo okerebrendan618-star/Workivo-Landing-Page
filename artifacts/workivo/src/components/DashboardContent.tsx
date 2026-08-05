@@ -135,20 +135,15 @@ if (file.type === "application/pdf") {
 
     const { data: insertedResume, error: databaseError } =
       await supabase
-        .from("resumes")
-        .insert({
-
-          user_id: user.id,
-
-          file_name: fileName,
-
-          file_url: urlData.publicUrl,
-
-          ats_score: null,
-
-          ai_feedback: null,
-
-        })
+.from("resumes")
+.insert({
+  user_id: user.id,
+  file_name: fileName,
+  file_url: urlData.publicUrl,
+  resume_text: resumeText,
+  ats_score: null,
+  ai_feedback: null,
+})
         .select()
         .single();
 
@@ -198,7 +193,7 @@ if (file.type === "application/pdf") {
 
       body: JSON.stringify({
 
-        resume_text: latestResume.resume_text,
+        resume_text: latestResume?.resume_text || "",
 
         job_description:
         "Software developer role requiring skills and experience."
@@ -209,13 +204,27 @@ if (file.type === "application/pdf") {
 
 
     const result = await response.json();
+    await supabase
+.from("resumes")
+.update({
+  ats_score: result.ats_score,
+  ai_feedback: result.feedback,
+})
+.eq("id", latestResume.id);
+
+setLatestResume({
+  ...latestResume,
+  ats_score: result.ats_score,
+  ai_feedback: result.feedback,
+});
+    
 
 
     console.log("AI Result:", result);
 
 
     alert(
-      `ATS Score: ${result.ats_score}%`
+      `ATS Score: ${result.ats_score}%\n\n${result.feedback}`
     );
 
 
