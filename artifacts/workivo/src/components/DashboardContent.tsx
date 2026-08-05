@@ -203,7 +203,11 @@ if (file.type === "application/pdf") {
     });
 
 
-    const result = await response.json();
+    if (!response.ok) {
+  throw new Error("Make webhook failed");
+}
+
+const result = await response.json();
     await supabase
 .from("resumes")
 .update({
