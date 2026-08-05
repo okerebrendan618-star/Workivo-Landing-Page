@@ -86,7 +86,11 @@ const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0
 
 
     if (!file) return;
-    const resumeText = await extractPdfText(file);
+    let resumeText = "";
+
+if (file.type === "application/pdf") {
+  resumeText = await extractPdfText(file);
+}
 
 
     const fileName = `${Date.now()}-${file.name}`;
