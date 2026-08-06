@@ -82,6 +82,9 @@ const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
 
+    console.log("UPLOAD STARTED");
+alert("UPLOAD STARTED");
+
     const file = event.target.files?.[0];
 
 
