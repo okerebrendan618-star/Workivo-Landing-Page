@@ -158,17 +158,21 @@ if (file.type === "application/pdf") {
 
 
 
-    setLatestResume({
+   setLatestResume({
   ...insertedResume,
   resume_text: resumeText,
 });
 
-    setResumeCount((prev) => prev + 1);
+setResumeCount((prev) => prev + 1);
 
+alert("Resume uploaded successfully!");
 
-    alert("Resume uploaded successfully!");
+// Reset file input so the same file (or previously selected file) can be chosen again
+if (fileInputRef.current) {
+  fileInputRef.current.value = "";
+}
 
-  };
+}; 
 
 
 
