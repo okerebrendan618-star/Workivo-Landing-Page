@@ -87,8 +87,15 @@ alert("UPLOAD STARTED");
 
     const file = event.target.files?.[0];
 
+if (!file) {
+  alert("NO FILE FOUND");
+  return;
+}
 
-    if (!file) return;
+alert(`FILE FOUND: ${file.name}`);
+
+
+    
     let resumeText = "";
 
 if (file.type === "application/pdf") {
@@ -97,12 +104,20 @@ if (file.type === "application/pdf") {
 
 
     const fileName = `${Date.now()}-${file.name}`;
+    alert("ABOUT TO UPLOAD TO SUPABASE STORAGE");
 
 
 
     const { error: uploadError } = await supabase.storage
       .from("resumes")
       .upload(fileName, file);
+    if (uploadError) {
+  console.log(uploadError);
+  alert(uploadError.message);
+  return;
+}
+
+alert("UPLOAD TO STORAGE SUCCESSFUL");
 
 
 
