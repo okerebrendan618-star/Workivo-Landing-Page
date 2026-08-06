@@ -96,11 +96,7 @@ alert(`FILE FOUND: ${file.name}`);
 
 
     
-    let resumeText = "";
-
-if (file.type === "application/pdf") {
-  resumeText = await extractPdfText(file);
-}
+    let resumeText = "TEST PDF";
 
 
     const fileName = `${Date.now()}-${file.name}`;
