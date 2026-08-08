@@ -411,6 +411,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.110.8
         version: 2.110.8
+      pdfjs-dist:
+        specifier: 6.2.108
+        version: 6.2.108
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0
