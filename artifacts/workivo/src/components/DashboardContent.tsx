@@ -98,12 +98,38 @@ alert(`FILE FOUND: ${file.name}`);
     
     let resumeText = "";
 
-if (file.type === "application/pdf") {
-  resumeText = await extractPdfText(file);
-}
+try {
+  const isPdf =
+    file.type === "application/pdf" ||
+    file.name.toLowerCase().endsWith(".pdf");
 
-if (!resumeText.trim()) {
-  alert("Could not extract text from this PDF. Please try a text-based PDF.");
+  if (!isPdf) {
+    alert("Please upload a PDF resume.");
+    return;
+  }
+
+  alert("PDF detected. Starting text extraction...");
+
+  resumeText = await extractPdfText(file);
+
+  alert(`PDF text extracted: ${resumeText.length} characters`);
+
+  if (!resumeText.trim()) {
+    alert(
+      "PDF was opened, but no selectable text was found. Please upload a text-based PDF."
+    );
+    return;
+  }
+
+} catch (error) {
+  console.error("PDF EXTRACTION ERROR:", error);
+
+  alert(
+    `PDF text extraction failed: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+
   return;
 }
 
