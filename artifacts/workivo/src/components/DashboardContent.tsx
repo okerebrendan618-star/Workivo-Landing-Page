@@ -96,7 +96,16 @@ alert(`FILE FOUND: ${file.name}`);
 
 
     
-    let resumeText = "TEST PDF";
+    let resumeText = "";
+
+if (file.type === "application/pdf") {
+  resumeText = await extractPdfText(file);
+}
+
+if (!resumeText.trim()) {
+  alert("Could not extract text from this PDF. Please try a text-based PDF.");
+  return;
+}
 
 
     const fileName = `${Date.now()}-${file.name}`;
