@@ -1,28 +1,27 @@
-import {
-  getDocument,
-  GlobalWorkerOptions,
-} from "pdfjs-dist/legacy/build/pdf.mjs";
+import * as pdfjsLib from "pdfjs-dist";
 
-GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-  import.meta.url
-).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 export async function extractPdfText(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
 
-  const pdf = await getDocument({
+  const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
-  }).promise;
+  });
+
+  const pdf = await loadingTask.promise;
 
   let text = "";
 
-  for (let page = 1; page <= pdf.numPages; page++) {
-    const pageData = await pdf.getPage(page);
-    const content = await pageData.getTextContent();
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
 
     const pageText = content.items
-      .map((item: any) => item.str || "")
+      .map((item: any) =>
+        typeof item.str === "string" ? item.str : ""
+      )
       .join(" ");
 
     text += pageText + "\n";
