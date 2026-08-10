@@ -3,7 +3,6 @@ import {
   Sparkles,
   TrendingUp,
   UploadCloud,
-  Crown,
   CheckCircle2,
   Zap,
   Bot,
@@ -25,29 +24,35 @@ import { extractPdfText } from "../lib/pdfReader";
 
 export default function DashboardContent() {
   /* =========================================================
-     EXISTING WORKING RESUME / ATS STATE
+     RESUME / ATS STATE
      ========================================================= */
 
   const [latestResume, setLatestResume] = useState<any>(null);
   const [resumeCount, setResumeCount] = useState(0);
+
   const [isScanning, setIsScanning] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   /* =========================================================
-     DASHBOARD UI LIMITS
-     
-     IMPORTANT:
-     These are UI limits only for now.
-     Real server/database enforcement will be added later.
+     FREE PLAN LIMITS
      ========================================================= */
 
   const FREE_LIMITS = {
     atsScans: 3,
     tailoredResumes: 3,
     jobMatches: 2,
-    trackedApplications: 10,
+    trackedApplications: 5,
   };
 
-  const [usage] = useState({
+  /* =========================================================
+     USAGE STATE
+     
+     IMPORTANT:
+     These counters remain UI-side for now.
+     They are NOT treated as secure billing enforcement.
+     ========================================================= */
+
+  const [usage, setUsage] = useState({
     atsScans: 0,
     tailoredResumes: 0,
     jobMatches: 0,
@@ -55,28 +60,41 @@ export default function DashboardContent() {
   });
 
   /* =========================================================
-     DASHBOARD NAVIGATION
+     STATIC ATS JOB DESCRIPTION
      
-     This only controls the dashboard UI.
-     It does NOT replace or interfere with the existing
-     upload / ATS pipeline.
+     IMPORTANT:
+     The actual ATS webhook call is now server-side.
+     The frontend never contains the Make webhook URL.
+     
+     The Edge Function can use this same fixed description
+     server-side as well.
      ========================================================= */
 
-  const [activeWorkspace, setActiveWorkspace] = useState<
-    "overview" | "ats" | "tailored" | "matching" | "tracker" | "insights"
-  >("overview");
+  const STATIC_ATS_JOB_DESCRIPTION =
+    "Software developer role requiring skills and experience.";
+
+  /* =========================================================
+     WORKSPACE NAVIGATION
+     
+     ONE workspace renderer only.
+     The duplicate workspace/modal that existed later in the
+     original file will be removed in Part 2.
+     ========================================================= */
+
+  type Workspace =
+    | "overview"
+    | "ats"
+    | "tailored"
+    | "matching"
+    | "tracker"
+    | "insights";
+
+  const [activeWorkspace, setActiveWorkspace] =
+    useState<Workspace>("overview");
 
   const [showWorkspace, setShowWorkspace] = useState(false);
 
-  const openWorkspace = (
-    workspace:
-      | "overview"
-      | "ats"
-      | "tailored"
-      | "matching"
-      | "tracker"
-      | "insights"
-  ) => {
+  const openWorkspace = (workspace: Workspace) => {
     setActiveWorkspace(workspace);
     setShowWorkspace(workspace !== "overview");
   };
@@ -87,159 +105,260 @@ export default function DashboardContent() {
   };
 
   /* =========================================================
-     EXISTING MAKE WEBHOOK
-     DO NOT CHANGE
+     FILE INPUT
      ========================================================= */
 
-  const MAKE_WEBHOOK_URL =
-    "https://hook.eu1.make.com/hy6c1fbiuwhk1iyjfm48defjdrb0577l";
-
-  /* =========================================================
-     EXISTING FILE INPUT
-     DO NOT CHANGE
-     ========================================================= */
-
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef =
+    useRef<HTMLInputElement | null>(null);
 
   const handleUploadClick = () => {
+    if (isUploading) return;
+
     fileInputRef.current?.click();
   };
 
   /* =========================================================
+     RESET FILE INPUT
+     ========================================================= */
+
+  const resetFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  /* =========================================================
      LOAD USER RESUME AFTER REFRESH
-     EXISTING LOGIC
      ========================================================= */
 
   useEffect(() => {
+    let isMounted = true;
+
     const getLatestResume = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      try {
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser();
 
-      if (!user) return;
+        if (authError) {
+          console.error(
+            "AUTH ERROR:",
+            authError
+          );
+          return;
+        }
 
-      const { data, error } = await supabase
-        .from("resumes")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        if (!user) return;
 
-      if (!error && data) {
-        setLatestResume(data);
+        const {
+          data,
+          error,
+        } = await supabase
+          .from("resumes")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", {
+            ascending: false,
+          })
+          .limit(1)
+          .maybeSingle();
+
+        if (!error && data && isMounted) {
+          setLatestResume(data);
+        }
+
+        if (error) {
+          console.error(
+            "LATEST RESUME ERROR:",
+            error
+          );
+        }
+
+        const {
+          count,
+          error: countError,
+        } = await supabase
+          .from("resumes")
+          .select("*", {
+            count: "exact",
+            head: true,
+          })
+          .eq("user_id", user.id);
+
+        if (countError) {
+          console.error(
+            "RESUME COUNT ERROR:",
+            countError
+          );
+          return;
+        }
+
+        if (isMounted) {
+          setResumeCount(count || 0);
+        }
+      } catch (error) {
+        console.error(
+          "RESUME LOAD ERROR:",
+          error
+        );
       }
-
-      const { count } = await supabase
-        .from("resumes")
-        .select("*", {
-          count: "exact",
-          head: true,
-        })
-        .eq("user_id", user.id);
-
-      setResumeCount(count || 0);
     };
 
     getLatestResume();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   /* =========================================================
-     EXISTING RESUME UPLOAD PIPELINE
+     RESUME UPLOAD PIPELINE
+     
+     PDF ONLY.
      
      IMPORTANT:
-     This is deliberately kept working the same way.
-     Do NOT connect the new workspace buttons directly
-     to a different upload handler.
+     There is intentionally NO file-size validation here.
+     Do not add one.
      ========================================================= */
 
   const handleFileUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
   ) => {
-    console.log("UPLOAD STARTED");
-    alert("UPLOAD STARTED");
-
     const file = event.target.files?.[0];
 
     if (!file) {
-      alert("NO FILE FOUND");
+      resetFileInput();
       return;
     }
 
-    alert(`FILE FOUND: ${file.name}`);
+    /* -------------------------------------------------------
+       PDF VALIDATION
+       
+       Keep PDF-only behavior.
+       No size validation is intentionally performed.
+       ------------------------------------------------------- */
+
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      alert("Please upload a PDF resume.");
+      resetFileInput();
+      return;
+    }
+
+    setIsUploading(true);
 
     let resumeText = "";
+    let uploadedFileName: string | null = null;
 
     try {
-      const isPdf =
-        file.type === "application/pdf" ||
-        file.name.toLowerCase().endsWith(".pdf");
-
-      if (!isPdf) {
-        alert("Please upload a PDF resume.");
-        return;
-      }
-
-      alert("PDF detected. Starting text extraction...");
+      /* -----------------------------------------------------
+         EXTRACT PDF TEXT
+         ----------------------------------------------------- */
 
       resumeText = await extractPdfText(file);
-
-      alert(`PDF text extracted: ${resumeText.length} characters`);
 
       if (!resumeText.trim()) {
         alert(
           "PDF was opened, but no selectable text was found. Please upload a text-based PDF."
         );
+
+        resetFileInput();
         return;
       }
-    } catch (error) {
-      console.error("PDF EXTRACTION ERROR:", error);
 
-      alert(
-        `PDF text extraction failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      /* -----------------------------------------------------
+         GET AUTHENTICATED USER BEFORE STORAGE WORK
+         ----------------------------------------------------- */
 
-      return;
-    }
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-    const fileName = `${Date.now()}-${file.name}`;
+      if (authError) {
+        console.error(
+          "AUTH ERROR:",
+          authError
+        );
 
-    alert("ABOUT TO UPLOAD TO SUPABASE STORAGE");
+        alert("Unable to verify your account.");
+        resetFileInput();
+        return;
+      }
 
-    const { error: uploadError } = await supabase.storage
-      .from("resumes")
-      .upload(fileName, file);
+      if (!user) {
+        alert("Please login first.");
+        resetFileInput();
+        return;
+      }
 
-    if (uploadError) {
-      console.log(uploadError);
-      alert(uploadError.message);
-      return;
-    }
+      /* -----------------------------------------------------
+         USER-SCOPED STORAGE PATH
+         
+         This avoids using a globally exposed/random root-level
+         filename.
+         ----------------------------------------------------- */
 
-    alert("UPLOAD TO STORAGE SUCCESSFUL");
+      const safeFileName = file.name
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .replace(/\.pdf$/i, ".pdf");
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      const fileName =
+        `${user.id}/${Date.now()}-${safeFileName}`;
 
-    if (!user) {
-      alert("Please login first");
-      return;
-    }
+      uploadedFileName = fileName;
 
-    const { data: urlData } = supabase.storage
-      .from("resumes")
-      .getPublicUrl(fileName);
+      /* -----------------------------------------------------
+         UPLOAD TO SUPABASE STORAGE
+         ----------------------------------------------------- */
 
-    const { data: insertedResume, error: databaseError } =
-      await supabase
+      const {
+        error: uploadError,
+      } = await supabase.storage
+        .from("resumes")
+        .upload(fileName, file, {
+          contentType: "application/pdf",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error(
+          "STORAGE UPLOAD ERROR:",
+          uploadError
+        );
+
+        alert(
+          `Resume upload failed: ${uploadError.message}`
+        );
+
+        resetFileInput();
+        return;
+      }
+
+      /* -----------------------------------------------------
+         DATABASE INSERT
+         ----------------------------------------------------- */
+
+      /*
+       * Keep the existing file_url column for compatibility.
+       *
+       * The storage path is stored rather than generating a
+       * permanently public resume URL.
+       */
+
+      const {
+        data: insertedResume,
+        error: databaseError,
+      } = await supabase
         .from("resumes")
         .insert({
           user_id: user.id,
           file_name: fileName,
-          file_url: urlData.publicUrl,
+          file_url: fileName,
           resume_text: resumeText,
           ats_score: null,
           ai_feedback: null,
@@ -247,30 +366,100 @@ export default function DashboardContent() {
         .select()
         .single();
 
-    if (databaseError) {
-      alert(databaseError.message);
-      return;
-    }
+      if (databaseError) {
+        console.error(
+          "DATABASE INSERT ERROR:",
+          databaseError
+        );
 
-    setLatestResume({
-      ...insertedResume,
-      resume_text: resumeText,
-    });
+        /* ---------------------------------------------------
+           CLEAN UP STORAGE IF DATABASE INSERT FAILS
+           --------------------------------------------------- */
 
-    setResumeCount((prev) => prev + 1);
+        await supabase.storage
+          .from("resumes")
+          .remove([fileName]);
 
-    alert("Resume uploaded successfully!");
+        uploadedFileName = null;
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+        alert(
+          `Resume could not be saved: ${databaseError.message}`
+        );
+
+        resetFileInput();
+        return;
+      }
+
+      /* -----------------------------------------------------
+         UPDATE UI
+         ----------------------------------------------------- */
+
+      setLatestResume({
+        ...insertedResume,
+        resume_text: resumeText,
+      });
+
+      setResumeCount(
+        (previousCount) => previousCount + 1
+      );
+
+      alert("Resume uploaded successfully!");
+
+      resetFileInput();
+    } catch (error) {
+      console.error(
+        "RESUME UPLOAD PIPELINE ERROR:",
+        error
+      );
+
+      /* -----------------------------------------------------
+         CLEAN UP ORPHANED STORAGE FILE
+         ----------------------------------------------------- */
+
+      if (uploadedFileName) {
+        try {
+          await supabase.storage
+            .from("resumes")
+            .remove([uploadedFileName]);
+        } catch (cleanupError) {
+          console.error(
+            "STORAGE CLEANUP ERROR:",
+            cleanupError
+          );
+        }
+      }
+
+      alert(
+        `Resume upload failed: ${
+          error instanceof Error
+            ? error.message
+            : String(error)
+        }`
+      );
+
+      resetFileInput();
+    } finally {
+      setIsUploading(false);
     }
   };
 
   /* =========================================================
-     EXISTING ATS SCAN PIPELINE
+     ATS SCAN PIPELINE
      
-     IMPORTANT:
-     DO NOT MODIFY THIS CONNECTION.
+     IMPORTANT SECURITY CHANGE:
+     
+     ❌ NO MAKE WEBHOOK URL IN FRONTEND
+     
+     The frontend now calls a Supabase Edge Function.
+     
+     The Edge Function is responsible for:
+       1. Verifying the user
+       2. Using the fixed ATS job description
+       3. Calling Make securely
+       4. Validating the Make response
+       5. Returning the ATS result
+     
+     The Make webhook URL therefore never reaches the browser.
      ========================================================= */
 
   const handleScanResume = async () => {
@@ -279,697 +468,1238 @@ export default function DashboardContent() {
       return;
     }
 
+    if (!canUseATS) {
+      alert(
+        "You have reached your free ATS scan limit."
+      );
+      return;
+    }
+
+    if (isScanning) return;
+
     setIsScanning(true);
 
     try {
-      const response = await fetch(MAKE_WEBHOOK_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+      /* -----------------------------------------------------
+         SECURE SERVER-SIDE ATS REQUEST
+         
+         Edge Function name:
+         ats-scan
+         
+         IMPORTANT:
+         Do NOT put the Make URL here.
+         ----------------------------------------------------- */
 
-        body: JSON.stringify({
-          resume_text: latestResume?.resume_text || "",
+      const {
+        data,
+        error,
+      } = await supabase.functions.invoke(
+        "ats-scan",
+        {
+          body: {
+            resume_text:
+              latestResume.resume_text || "",
 
-          job_description:
-            "Software developer role requiring skills and experience.",
-        }),
-      });
+            /*
+             * Kept here as a fixed value for compatibility.
+             * The server should ultimately own the canonical
+             * value as well.
+             */
+            job_description:
+              STATIC_ATS_JOB_DESCRIPTION,
+          },
+        }
+      );
 
-      if (!response.ok) {
-        throw new Error("Make webhook failed");
+      if (error) {
+        console.error(
+          "ATS FUNCTION ERROR:",
+          error
+        );
+
+        throw new Error(
+          error.message ||
+            "ATS scan request failed."
+        );
       }
 
-      const result = await response.json();
+      /* -----------------------------------------------------
+         RESPONSE VALIDATION
+         ----------------------------------------------------- */
 
-      await supabase
+      if (!data || typeof data !== "object") {
+        throw new Error(
+          "Invalid ATS response."
+        );
+      }
+
+      const rawScore =
+        Number(data.ats_score);
+
+      if (
+        !Number.isFinite(rawScore)
+      ) {
+        throw new Error(
+          "ATS response did not contain a valid score."
+        );
+      }
+
+      const atsScore = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(rawScore)
+        )
+      );
+
+      const feedback =
+        typeof data.feedback === "string"
+          ? data.feedback
+          : "";
+
+      /* -----------------------------------------------------
+         DATABASE UPDATE
+         ----------------------------------------------------- */
+
+      const {
+        data: updatedResume,
+        error: updateError,
+      } = await supabase
         .from("resumes")
         .update({
-          ats_score: result.ats_score,
-          ai_feedback: result.feedback,
+          ats_score: atsScore,
+          ai_feedback: feedback,
         })
-        .eq("id", latestResume.id);
+        .eq("id", latestResume.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error(
+          "ATS DATABASE UPDATE ERROR:",
+          updateError
+        );
+
+        throw new Error(
+          "The ATS scan completed, but the result could not be saved."
+        );
+      }
+
+      /* -----------------------------------------------------
+         UPDATE LOCAL RESUME STATE
+         ----------------------------------------------------- */
 
       setLatestResume({
         ...latestResume,
-        ats_score: result.ats_score,
-        ai_feedback: result.feedback,
+        ...updatedResume,
+        ats_score: atsScore,
+        ai_feedback: feedback,
       });
 
-      console.log("AI Result:", result);
+      /* -----------------------------------------------------
+         UPDATE UI USAGE
+         ----------------------------------------------------- */
+
+      setUsage((previousUsage) => ({
+        ...previousUsage,
+        atsScans:
+          previousUsage.atsScans + 1,
+      }));
 
       alert(
-        `ATS Score: ${result.ats_score}%\n\n${result.feedback}`
+        `ATS Score: ${atsScore}%\n\n${
+          feedback || "No additional feedback provided."
+        }`
       );
     } catch (error) {
-      console.error(error);
+      console.error(
+        "ATS SCAN ERROR:",
+        error
+      );
 
-      alert("AI scan failed");
-    }
-
-    setIsScanning(false);
-  };
-
-  /* =========================================================
-     UI-ONLY FEATURE ACCESS
-     
-     These do NOT run the future AI pipelines yet.
-     They simply give the dashboard the proper structure
-     so we can connect the real backend later.
-     ========================================================= */
-
-  const canUseATS = usage.atsScans < FREE_LIMITS.atsScans;
-
-  const canUseTailored =
-    usage.tailoredResumes < FREE_LIMITS.tailoredResumes;
-
-  const canUseMatching =
-    usage.jobMatches < FREE_LIMITS.jobMatches;
-
-  const canUseTracker =
-    usage.trackedApplications < FREE_LIMITS.trackedApplications;
-
-  const featureCards = [
-    {
-      id: "ats" as const,
-      title: "ATS Resume Scanner",
-      description:
-        "Scan your resume against a target job and see how well it matches ATS requirements.",
-      icon: ScanSearch,
-      badge: `${FREE_LIMITS.atsScans} free scans`,
-      available: canUseATS,
-      action: "Scan Resume",
-    },
-    {
-      id: "tailored" as const,
-      title: "AI Tailored Resume",
-      description:
-        "Rewrite and optimize your resume for a specific job while keeping your experience authentic.",
-      icon: WandSparkles,
-      badge: `${FREE_LIMITS.tailoredResumes} free rewrites`,
-      available: canUseTailored,
-      action: "Tailor Resume",
-    },
-    {
-      id: "matching" as const,
-      title: "AI Job Matching",
-      description:
-        "Find opportunities that fit your resume, skills and career direction.",
-      icon: BriefcaseBusiness,
-      badge: `${FREE_LIMITS.jobMatches} free matches`,
-      available: canUseMatching,
-      action: "Find Jobs",
-    },
-    {
-      id: "tracker" as const,
-      title: "Job Tracker",
-      description:
-        "Keep your applications organized and monitor your job search from one place.",
-      icon: ClipboardList,
-      badge: `${FREE_LIMITS.trackedApplications} tracked`,
-      available: canUseTracker,
-      action: "Open Tracker",
-    },
-    {
-      id: "insights" as const,
-      title: "Career Insights",
-      description:
-        "See resume performance, application activity and career recommendations.",
-      icon: BarChart3,
-      badge: "Career intelligence",
-      available: true,
-      action: "View Insights",
-    },
-  ];
-
-  /* =========================================================
-     HELPER: WORKSPACE TITLE
-     ========================================================= */
-
-  const getWorkspaceTitle = () => {
-    switch (activeWorkspace) {
-      case "ats":
-        return "ATS Resume Scanner";
-
-      case "tailored":
-        return "AI Tailored Resume";
-
-      case "matching":
-        return "AI Job Matching";
-
-      case "tracker":
-        return "Job Tracker";
-
-      case "insights":
-        return "Career Insights";
-
-      default:
-        return "Workivo";
-    }
-  };
-
-  /* =========================================================
-     HELPER: WORKSPACE DESCRIPTION
-     ========================================================= */
-
-  const getWorkspaceDescription = () => {
-    switch (activeWorkspace) {
-      case "ats":
-        return "Analyze your resume against a target role.";
-
-      case "tailored":
-        return "Create a stronger, job-specific version of your resume.";
-
-      case "matching":
-        return "Discover jobs that match your experience and goals.";
-
-      case "tracker":
-        return "Organize and manage your job applications.";
-
-      case "insights":
-        return "Understand your resume and job-search performance.";
-
-      default:
-        return "";
+      alert(
+        error instanceof Error
+          ? error.message
+          : "AI scan failed."
+      );
+    } finally {
+      setIsScanning(false);
     }
   };
     /* =========================================================
-     MAIN DASHBOARD UI
+     USAGE HELPERS
+     ========================================================= */
+
+  const canUseATS =
+    usage.atsScans < FREE_LIMITS.atsScans;
+
+  const canUseTailoredResume =
+    usage.tailoredResumes <
+    FREE_LIMITS.tailoredResumes;
+
+  const canUseJobMatches =
+    usage.jobMatches <
+    FREE_LIMITS.jobMatches;
+
+  const canUseTracker =
+    usage.trackedApplications <
+    FREE_LIMITS.trackedApplications;
+
+  /* =========================================================
+     ATS SCORE DISPLAY
+     ========================================================= */
+
+  const atsScore =
+    latestResume?.ats_score !== null &&
+    latestResume?.ats_score !== undefined
+      ? Number(latestResume.ats_score)
+      : null;
+
+  const atsFeedback =
+    typeof latestResume?.ai_feedback === "string"
+      ? latestResume.ai_feedback
+      : "";
+
+  /* =========================================================
+     WORKSPACE ACTIONS
+     ========================================================= */
+
+  const handleATSWorkspace = () => {
+    if (!latestResume) {
+      alert("Please upload a resume first.");
+      return;
+    }
+
+    openWorkspace("ats");
+  };
+
+  const handleTailoredWorkspace = () => {
+    if (!canUseTailoredResume) {
+      alert(
+        "You have reached your free tailored resume limit."
+      );
+      return;
+    }
+
+    if (!latestResume) {
+      alert("Please upload a resume first.");
+      return;
+    }
+
+    openWorkspace("tailored");
+  };
+
+  const handleMatchingWorkspace = () => {
+    if (!canUseJobMatches) {
+      alert(
+        "You have reached your free job matching limit."
+      );
+      return;
+    }
+
+    openWorkspace("matching");
+  };
+
+  const handleTrackerWorkspace = () => {
+    if (!canUseTracker) {
+      alert(
+        "You have reached your free application tracker limit."
+      );
+      return;
+    }
+
+    openWorkspace("tracker");
+  };
+
+  /* =========================================================
+     OVERVIEW CARD
+     ========================================================= */
+
+  const renderOverview = () => {
+    return (
+      <div className="space-y-6">
+        {/* ---------------------------------------------------
+           HEADER
+           --------------------------------------------------- */}
+
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              AI Resume Dashboard
+            </h1>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Upload your resume, improve your ATS score,
+              and manage your job applications.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleUploadClick}
+            disabled={isUploading}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
+          >
+            <UploadCloud className="h-4 w-4" />
+
+            {isUploading
+              ? "Uploading..."
+              : "Upload Resume"}
+          </button>
+        </div>
+
+        {/* ---------------------------------------------------
+           HIDDEN FILE INPUT
+           --------------------------------------------------- */}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          onChange={handleFileUpload}
+          className="hidden"
+        />
+
+        {/* ---------------------------------------------------
+           RESUME STATUS
+           --------------------------------------------------- */}
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <FileText className="h-6 w-6" />
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Latest Resume
+                </p>
+
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {latestResume
+                    ? latestResume.file_name?.split("/").pop() ||
+                      "Resume uploaded"
+                    : "No resume uploaded yet"}
+                </p>
+              </div>
+            </div>
+
+            {latestResume && (
+              <div className="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Resume ready
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ---------------------------------------------------
+           FEATURE CARDS
+           --------------------------------------------------- */}
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {/* ATS */}
+          <button
+            type="button"
+            onClick={handleATSWorkspace}
+            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-blue-500/30"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <ScanSearch className="h-5 w-5" />
+              </div>
+
+              <ArrowUpRight className="h-4 w-4 text-slate-400 transition group-hover:text-blue-500" />
+            </div>
+
+            <h3 className="mt-5 font-semibold text-slate-900 dark:text-white">
+              ATS Scanner
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Check how well your resume matches ATS
+              requirements.
+            </p>
+
+            <div className="mt-4 flex items-center justify-between text-xs">
+              <span className="text-slate-400">
+                {usage.atsScans}/{FREE_LIMITS.atsScans} used
+              </span>
+
+              {atsScore !== null && (
+                <span className="font-semibold text-blue-600 dark:text-blue-400">
+                  {atsScore}% score
+                </span>
+              )}
+            </div>
+          </button>
+
+          {/* TAILORED RESUME */}
+          <button
+            type="button"
+            onClick={handleTailoredWorkspace}
+            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-purple-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-purple-500/30"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+                <WandSparkles className="h-5 w-5" />
+              </div>
+
+              <ArrowUpRight className="h-4 w-4 text-slate-400 transition group-hover:text-purple-500" />
+            </div>
+
+            <h3 className="mt-5 font-semibold text-slate-900 dark:text-white">
+              AI Resume Writer
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Tailor your resume to a specific job
+              description.
+            </p>
+
+            <div className="mt-4 text-xs text-slate-400">
+              {usage.tailoredResumes}/
+              {FREE_LIMITS.tailoredResumes} used
+            </div>
+          </button>
+
+          {/* JOB MATCHING */}
+          <button
+            type="button"
+            onClick={handleMatchingWorkspace}
+            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-emerald-500/30"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+                <BriefcaseBusiness className="h-5 w-5" />
+              </div>
+
+              <ArrowUpRight className="h-4 w-4 text-slate-400 transition group-hover:text-emerald-500" />
+            </div>
+
+            <h3 className="mt-5 font-semibold text-slate-900 dark:text-white">
+              Job Matching
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Find opportunities that fit your resume
+              and skills.
+            </p>
+
+            <div className="mt-4 text-xs text-slate-400">
+              {usage.jobMatches}/{FREE_LIMITS.jobMatches} used
+            </div>
+          </button>
+
+          {/* TRACKER */}
+          <button
+            type="button"
+            onClick={handleTrackerWorkspace}
+            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-orange-500/30"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
+                <ClipboardList className="h-5 w-5" />
+              </div>
+
+              <ArrowUpRight className="h-4 w-4 text-slate-400 transition group-hover:text-orange-500" />
+            </div>
+
+            <h3 className="mt-5 font-semibold text-slate-900 dark:text-white">
+              Job Tracker
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Keep every application organized in one
+              place.
+            </p>
+
+            <div className="mt-4 text-xs text-slate-400">
+              {usage.trackedApplications}/
+              {FREE_LIMITS.trackedApplications} tracked
+            </div>
+          </button>
+        </div>
+
+        {/* ---------------------------------------------------
+           ATS QUICK ACTION
+           --------------------------------------------------- */}
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-blue-500" />
+
+                <h2 className="font-semibold text-slate-900 dark:text-white">
+                  Ready to scan your resume?
+                </h2>
+              </div>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Upload a PDF resume and run an ATS scan
+                to receive a score and AI feedback.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleScanResume}
+              disabled={
+                !latestResume ||
+                isScanning ||
+                !canUseATS
+              }
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isScanning ? (
+                <>
+                  <Activity className="h-4 w-4 animate-pulse" />
+                  Scanning...
+                </>
+              ) : (
+                <>
+                  <ScanSearch className="h-4 w-4" />
+                  Scan Resume
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* ---------------------------------------------------
+           ATS RESULT
+           --------------------------------------------------- */}
+
+        {atsScore !== null && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex flex-col gap-6 md:flex-row md:items-center">
+              <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-full border-8 border-blue-100 dark:border-blue-500/20">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-slate-900 dark:text-white">
+                    {atsScore}
+                  </div>
+
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">
+                    ATS
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-semibold text-slate-900 dark:text-white">
+                    Latest ATS Result
+                  </h2>
+
+                  <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                    {atsScore}/100
+                  </span>
+                </div>
+
+                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {atsFeedback ||
+                    "Your resume was scanned successfully."}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ---------------------------------------------------
+           RESUME STATS
+           --------------------------------------------------- */}
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-3">
+              <FileText className="h-5 w-5 text-blue-500" />
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                Resumes
+              </span>
+            </div>
+
+            <p className="mt-3 text-2xl font-bold text-slate-900 dark:text-white">
+              {resumeCount}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-3">
+              <ScanSearch className="h-5 w-5 text-blue-500" />
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                ATS Scans
+              </span>
+            </div>
+
+            <p className="mt-3 text-2xl font-bold text-slate-900 dark:text-white">
+              {usage.atsScans}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-3">
+              <TrendingUp className="h-5 w-5 text-emerald-500" />
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                Best ATS Score
+              </span>
+            </div>
+
+            <p className="mt-3 text-2xl font-bold text-slate-900 dark:text-white">
+              {atsScore !== null
+                ? `${atsScore}%`
+                : "—"}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-3">
+              <Zap className="h-5 w-5 text-amber-500" />
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                Free ATS Left
+              </span>
+            </div>
+
+            <p className="mt-3 text-2xl font-bold text-slate-900 dark:text-white">
+              {Math.max(
+                0,
+                FREE_LIMITS.atsScans -
+                  usage.atsScans
+              )}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     ATS WORKSPACE
+     ========================================================= */
+
+  const renderATSWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              ATS Scanner
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Analyze your resume against ATS requirements.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <ScanSearch className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Resume ATS Analysis
+                </h3>
+
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Fixed job profile analysis
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-8">
+              {atsScore !== null ? (
+                <div>
+                  <div className="text-6xl font-bold text-slate-900 dark:text-white">
+                    {atsScore}
+                    <span className="text-2xl text-slate-400">
+                      /100
+                    </span>
+                  </div>
+
+                  <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                    <div
+                      className="h-full rounded-full bg-blue-600 transition-all"
+                      style={{
+                        width: `${atsScore}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {atsFeedback ||
+                        "No additional feedback provided."}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
+                  <ScanSearch className="mx-auto h-8 w-8 text-slate-400" />
+
+                  <p className="mt-3 font-medium text-slate-700 dark:text-slate-300">
+                    No ATS result yet
+                  </p>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Run your first scan to see your score.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleScanResume}
+              disabled={
+                !latestResume ||
+                isScanning ||
+                !canUseATS
+              }
+              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isScanning ? (
+                <>
+                  <Activity className="h-4 w-4 animate-pulse" />
+                  Scanning Resume...
+                </>
+              ) : (
+                <>
+                  <ScanSearch className="h-4 w-4" />
+                  Run ATS Scan
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <Bot className="h-5 w-5 text-purple-500" />
+
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  AI Analysis
+                </h3>
+              </div>
+
+              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Your resume is sent through the secure
+                server-side ATS pipeline. The Make webhook
+                URL is not exposed in the browser.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <LockKeyhole className="h-5 w-5 text-emerald-500" />
+
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Secure Pipeline
+                </h3>
+              </div>
+
+              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Browser → Supabase Edge Function → Make →
+                ATS result.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <Zap className="h-5 w-5 text-amber-500" />
+
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Free Usage
+                </h3>
+              </div>
+
+              <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+                {usage.atsScans} of{" "}
+                {FREE_LIMITS.atsScans} ATS scans used.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     TAILORED RESUME WORKSPACE
+     ========================================================= */
+
+  const renderTailoredWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              AI Resume Writer
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Tailor your resume for a specific opportunity.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mx-auto max-w-2xl text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+              <WandSparkles className="h-7 w-7" />
+            </div>
+
+            <h3 className="mt-5 text-xl font-bold text-slate-900 dark:text-white">
+              Tailor your resume with AI
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              This workspace is ready for the AI resume
+              rewriting pipeline.
+            </p>
+
+            <div className="mt-6 rounded-xl bg-slate-50 p-5 text-left dark:bg-slate-800/60">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                Current resume
+              </p>
+
+              <p className="mt-2 truncate text-sm text-slate-500 dark:text-slate-400">
+                {latestResume?.file_name?.split("/").pop() ||
+                  "No resume selected"}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                alert(
+                  "AI Resume Writer pipeline coming next."
+                )
+              }
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-purple-700"
+            >
+              <Sparkles className="h-4 w-4" />
+              Start AI Rewrite
+            </button>
+
+            <p className="mt-3 text-xs text-slate-400">
+              {usage.tailoredResumes}/
+              {FREE_LIMITS.tailoredResumes} free rewrites used
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     JOB MATCHING WORKSPACE
+     ========================================================= */
+
+  const renderMatchingWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              Job Matching
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Discover jobs that fit your profile.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mx-auto max-w-2xl text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+              <BriefcaseBusiness className="h-7 w-7" />
+            </div>
+
+            <h3 className="mt-5 text-xl font-bold text-slate-900 dark:text-white">
+              Find your next opportunity
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Job matching will use your resume profile to
+              surface relevant opportunities.
+            </p>
+
+            <button
+              type="button"
+              onClick={() =>
+                alert(
+                  "Job matching pipeline coming next."
+                )
+              }
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+            >
+              <Zap className="h-4 w-4" />
+              Find Matching Jobs
+            </button>
+
+            <p className="mt-3 text-xs text-slate-400">
+              {usage.jobMatches}/
+              {FREE_LIMITS.jobMatches} free searches used
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     APPLICATION TRACKER WORKSPACE
+     ========================================================= */
+
+  const renderTrackerWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-orange-600 dark:text-orange-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              Application Tracker
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Organize and track your job applications.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="mx-auto max-w-2xl text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
+              <ClipboardList className="h-7 w-7" />
+            </div>
+
+            <h3 className="mt-5 text-xl font-bold text-slate-900 dark:text-white">
+              Track every application
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+              Keep applications, interviews, offers, and
+              follow-ups organized.
+            </p>
+
+            <button
+              type="button"
+              onClick={() =>
+                alert(
+                  "Application tracker pipeline coming next."
+                )
+              }
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-orange-700"
+            >
+              <ClipboardList className="h-4 w-4" />
+              Add Application
+            </button>
+
+            <p className="mt-3 text-xs text-slate-400">
+              {usage.trackedApplications}/
+              {FREE_LIMITS.trackedApplications} tracked
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     INSIGHTS WORKSPACE
+     ========================================================= */
+
+  const renderInsightsWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              Insights
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Understand your resume performance.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <BarChart3 className="h-6 w-6 text-blue-500" />
+
+            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+              Resume uploads
+            </p>
+
+            <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">
+              {resumeCount}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <TrendingUp className="h-6 w-6 text-emerald-500" />
+
+            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+              Latest ATS score
+            </p>
+
+            <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">
+              {atsScore !== null
+                ? `${atsScore}%`
+                : "—"}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <Activity className="h-6 w-6 text-purple-500" />
+
+            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+              ATS scans used
+            </p>
+
+            <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">
+              {usage.atsScans}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     WORKSPACE RENDERER
+     
+     IMPORTANT:
+     This is the ONE workspace renderer.
+     ========================================================= */
+
+  const renderWorkspace = () => {
+    switch (activeWorkspace) {
+      case "ats":
+        return renderATSWorkspace();
+
+      case "tailored":
+        return renderTailoredWorkspace();
+
+      case "matching":
+        return renderMatchingWorkspace();
+
+      case "tracker":
+        return renderTrackerWorkspace();
+
+      case "insights":
+        return renderInsightsWorkspace();
+
+      case "overview":
+      default:
+        return renderOverview();
+    }
+  };
+
+  /* =========================================================
+     FINAL RENDER
      ========================================================= */
 
   return (
-    <main className="relative min-h-screen overflow-hidden text-white">
+    <div className="min-h-screen bg-slate-50 px-4 py-6 dark:bg-slate-950 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl">
+        {/* ---------------------------------------------------
+           TOP NAV
+           --------------------------------------------------- */}
 
-      {/* =====================================================
-          PREMIUM AI BACKGROUND
-          Dark-only theme with blurred futuristic atmosphere
-          ===================================================== */}
-
-      <div className="pointer-events-none fixed inset-0 -z-20 overflow-hidden bg-[#05060a]">
-
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(99,102,241,0.18),transparent_35%),radial-gradient(circle_at_85%_20%,rgba(168,85,247,0.16),transparent_35%),radial-gradient(circle_at_50%_90%,rgba(14,165,233,0.10),transparent_40%)]" />
-
-        <div className="absolute -left-32 top-20 h-96 w-96 rounded-full bg-indigo-600/10 blur-[120px]" />
-
-        <div className="absolute right-0 top-40 h-[500px] w-[500px] rounded-full bg-purple-600/10 blur-[140px]" />
-
-        <div className="absolute bottom-0 left-1/3 h-96 w-96 rounded-full bg-cyan-500/5 blur-[130px]" />
-
-      </div>
-
-
-      {/* =====================================================
-          TOP DASHBOARD HEADER
-          ===================================================== */}
-
-      <section className="relative mb-8 overflow-hidden rounded-[30px] border border-white/10 bg-white/[0.045] p-6 shadow-2xl backdrop-blur-2xl">
-
-        <div className="absolute -right-20 -top-24 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
-
-        <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-
-          <div>
-
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-3 py-1.5 text-xs font-semibold text-indigo-200">
-
-              <Sparkles className="h-3.5 w-3.5" />
-
-              WORKIVO AI V2.0
-
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-900">
+              <Bot className="h-5 w-5" />
             </div>
 
-
-            <h1 className="text-3xl font-black tracking-tight text-white md:text-4xl">
-
-              Your career command center.
-
-            </h1>
-
-
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400 md:text-base">
-
-              Analyze your resume, tailor it for specific roles,
-              discover matching jobs and manage your applications
-              from one intelligent workspace.
-
-            </p>
-
-          </div>
-
-
-          <div className="flex flex-wrap gap-3">
-
-            <button
-              onClick={handleUploadClick}
-              className="flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-900 shadow-lg transition hover:-translate-y-0.5 hover:bg-slate-100"
-            >
-
-              <UploadCloud className="h-4 w-4" />
-
-              Upload Resume
-
-            </button>
-
-
-            <button
-              onClick={() => openWorkspace("ats")}
-              className="flex items-center gap-2 rounded-2xl border border-indigo-400/20 bg-indigo-500/10 px-5 py-3 text-sm font-semibold text-indigo-200 transition hover:bg-indigo-500/20"
-            >
-
-              <ScanSearch className="h-4 w-4" />
-
-              ATS Scanner
-
-            </button>
-
-          </div>
-
-        </div>
-
-      </section>
-
-
-      {/* =====================================================
-          RESUME STATUS STRIP
-          ===================================================== */}
-
-      <section className="mb-8 grid gap-4 md:grid-cols-3">
-
-        {/* LAST RESUME */}
-
-        <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl">
-
-          <div className="flex items-center justify-between">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/15">
-
-                <FileText className="h-5 w-5 text-indigo-300" />
-
-              </div>
-
-              <div>
-
-                <p className="text-xs uppercase tracking-widest text-slate-500">
-                  Resume
-                </p>
-
-                <p className="mt-1 max-w-[190px] truncate text-sm font-semibold text-white">
-
-                  {latestResume
-                    ? latestResume.file_name
-                    : "No resume uploaded"}
-
-                </p>
-
-              </div>
-
-            </div>
-
-            <CheckCircle2
-              className={`h-5 w-5 ${
-                latestResume
-                  ? "text-emerald-400"
-                  : "text-slate-600"
-              }`}
-            />
-
-          </div>
-
-        </div>
-
-
-        {/* ATS STATUS */}
-
-        <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl">
-
-          <div className="flex items-center justify-between">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/15">
-
-                <ScanSearch className="h-5 w-5 text-emerald-300" />
-
-              </div>
-
-              <div>
-
-                <p className="text-xs uppercase tracking-widest text-slate-500">
-                  ATS Score
-                </p>
-
-                <p className="mt-1 text-sm font-semibold text-white">
-
-                  {latestResume?.ats_score !== null &&
-                  latestResume?.ats_score !== undefined
-                    ? `${latestResume.ats_score}%`
-                    : "Not scanned"}
-
-                </p>
-
-              </div>
-
-            </div>
-
-            {latestResume?.ats_score !== null &&
-            latestResume?.ats_score !== undefined ? (
-              <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold text-emerald-300">
-                READY
-              </span>
-            ) : (
-              <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-bold text-slate-500">
-                PENDING
-              </span>
-            )}
-
-          </div>
-
-        </div>
-
-
-        {/* RESUME COUNT */}
-
-        <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5 backdrop-blur-xl">
-
-          <div className="flex items-center justify-between">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/15">
-
-                <Sparkles className="h-5 w-5 text-purple-300" />
-
-              </div>
-
-              <div>
-
-                <p className="text-xs uppercase tracking-widest text-slate-500">
-                  Resume Library
-                </p>
-
-                <p className="mt-1 text-sm font-semibold text-white">
-                  {resumeCount} uploaded
-                </p>
-
-              </div>
-
-            </div>
-
-            <span className="rounded-full bg-purple-500/10 px-2.5 py-1 text-[10px] font-bold text-purple-300">
-              LIBRARY
+            <span className="font-bold text-slate-900 dark:text-white">
+              Workivo
             </span>
-
           </div>
 
+          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
+            <button
+              type="button"
+              onClick={closeWorkspace}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                activeWorkspace === "overview"
+                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
+            >
+              Overview
+            </button>
+
+            <button
+              type="button"
+              onClick={handleATSWorkspace}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                activeWorkspace === "ats"
+                  ? "bg-blue-600 text-white"
+                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
+            >
+              ATS
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTailoredWorkspace}
+              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition sm:block ${
+                activeWorkspace === "tailored"
+                  ? "bg-purple-600 text-white"
+                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
+            >
+              AI Resume
+            </button>
+
+            <button
+              type="button"
+              onClick={handleMatchingWorkspace}
+              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition md:block ${
+                activeWorkspace === "matching"
+                  ? "bg-emerald-600 text-white"
+                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
+            >
+              Jobs
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTrackerWorkspace}
+              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition lg:block ${
+                activeWorkspace === "tracker"
+                  ? "bg-orange-600 text-white"
+                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
+            >
+              Tracker
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                openWorkspace("insights")
+              }
+              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition xl:block ${
+                activeWorkspace === "insights"
+                  ? "bg-slate-700 text-white"
+                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+              }`}
+            >
+              Insights
+            </button>
+          </div>
         </div>
 
-      </section>
+        {/* ---------------------------------------------------
+           MAIN WORKSPACE
+           --------------------------------------------------- */}
 
-
-      {/* =====================================================
-          MAIN FEATURE GRID
-          ===================================================== */}
-
-      <section className="mb-8">
-
-        <div className="mb-5 flex items-end justify-between gap-4">
-
-          <div>
-
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-300">
-              Workivo Intelligence
-            </p>
-
-            <h2 className="mt-1 text-2xl font-black text-white">
-              Career tools
-            </h2>
-
-          </div>
-
-
-          <div className="hidden text-right sm:block">
-
-            <p className="text-xs text-slate-500">
-              Free plan usage
-            </p>
-
-            <p className="mt-1 text-sm font-semibold text-slate-300">
-              {usage.atsScans}/{FREE_LIMITS.atsScans} ATS scans used
-            </p>
-
-          </div>
-
+        <div
+          className={
+            showWorkspace
+              ? "rounded-3xl"
+              : ""
+          }
+        >
+          {renderWorkspace()}
         </div>
-
-
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-
-          {featureCards
-            .filter((feature) =>
-              ["ats", "tailored", "matching", "tracker"].includes(
-                feature.id
-              )
-            )
-            .map((feature) => {
-
-              const Icon = feature.icon;
-
-              return (
-                <button
-                  key={feature.id}
-                  onClick={() => openWorkspace(feature.id)}
-                  className="group relative overflow-hidden rounded-[28px] border border-white/10 bg-white/[0.045] p-6 text-left shadow-xl backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:border-indigo-400/30 hover:bg-white/[0.07]"
-                >
-
-                  {/* CARD GLOW */}
-
-                  <div className="pointer-events-none absolute -right-16 -top-16 h-36 w-36 rounded-full bg-indigo-500/10 blur-3xl transition group-hover:bg-indigo-500/20" />
-
-
-                  <div className="relative z-10">
-
-                    <div className="flex items-start justify-between">
-
-                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10">
-
-                        <Icon className="h-6 w-6 text-indigo-300" />
-
-                      </div>
-
-
-                      <ArrowUpRight className="h-5 w-5 text-slate-600 transition group-hover:text-indigo-300" />
-
-                    </div>
-
-
-                    <h3 className="mt-6 text-lg font-bold text-white">
-
-                      {feature.title}
-
-                    </h3>
-
-
-                    <p className="mt-2 min-h-[72px] text-sm leading-6 text-slate-400">
-
-                      {feature.description}
-
-                    </p>
-
-
-                    <div className="mt-5 flex items-center justify-between">
-
-                      <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] font-semibold text-slate-300">
-
-                        {feature.badge}
-
-                      </span>
-
-
-                      {feature.available ? (
-                        <span className="text-xs font-bold text-indigo-300">
-
-                          Open
-
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-xs font-bold text-slate-500">
-
-                          <LockKeyhole className="h-3.5 w-3.5" />
-
-                          Limit
-
-                        </span>
-                      )}
-
-                    </div>
-
-                  </div>
-
-                </button>
-              );
-            })}
-
-        </div>
-
-      </section>
-
-
-      {/* =====================================================
-          ATS FEATURE PANEL
-          Existing working scan button remains connected
-          ===================================================== */}
-
-      <section className="relative mb-8 overflow-hidden rounded-[32px] border border-indigo-400/15 bg-gradient-to-br from-indigo-600/10 via-purple-600/5 to-transparent p-7 shadow-2xl backdrop-blur-xl">
-
-        <div className="absolute right-0 top-0 h-64 w-64 rounded-full bg-indigo-500/10 blur-[100px]" />
-
-        <div className="relative z-10 grid gap-8 lg:grid-cols-[1.4fr_0.6fr] lg:items-center">
-
-          <div>
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15">
-
-                <ScanSearch className="h-6 w-6 text-indigo-300" />
-
-              </div>
-
-              <div>
-
-                <p className="text-xs font-bold uppercase tracking-widest text-indigo-300">
-                  Resume intelligence
-                </p>
-
-                <h2 className="text-2xl font-black text-white">
-                  Scan your resume with AI
-                </h2>
-
-              </div>
-
-            </div>
-
-
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-400">
-
-              Your existing ATS scanner remains connected to the
-              working backend. Upload a resume first, then run the
-              AI scan without changing the existing pipeline.
-
-            </p>
-
-
-            <div className="mt-6 flex flex-wrap gap-3">
-
-              <button
-                onClick={handleUploadClick}
-                className="flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
-              >
-
-                <UploadCloud className="h-4 w-4" />
-
-                Upload Resume
-
-              </button>
-
-
-              <button
-                onClick={handleScanResume}
-                disabled={isScanning}
-                className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-
-                <ScanSearch className="h-4 w-4" />
-
-                {isScanning
-                  ? "Scanning..."
-                  : "Scan Resume with AI"}
-
-              </button>
-
-            </div>
-
-          </div>
-
-
-          <div className="rounded-3xl border border-white/10 bg-black/20 p-6">
-
-            <p className="text-xs uppercase tracking-widest text-slate-500">
-              Current ATS score
-            </p>
-
-
-            <div className="mt-3 flex items-end gap-2">
-
-              <span className="text-6xl font-black text-white">
-
-                {latestResume?.ats_score ?? 0}
-
-              </span>
-
-              <span className="mb-2 text-xl font-bold text-indigo-300">
-                %
-              </span>
-
-            </div>
-
-
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/5">
-
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all"
-                style={{
-                  width: `${Math.min(
-                    Number(latestResume?.ats_score ?? 0),
-                    100
-                  )}%`,
-                }}
-              />
-
-            </div>
-
-
-            <p className="mt-3 text-xs text-slate-500">
-
-              {latestResume?.ats_score !== null &&
-              latestResume?.ats_score !== undefined
-                ? "Latest resume analysis"
-                : "Upload and scan your resume to calculate your score"}
-
-            </p>
-
-          </div>
-
-        </div>
-
-      </section>
-
-
+      </div>
+    </div>
+  );
+}
       {/* =====================================================
           CAREER WORKSPACE PREVIEW
           ===================================================== */}
 
       <section className="mb-8 grid gap-5 lg:grid-cols-3">
 
+        {/* TAILORED RESUME */}
+
         <button
+          type="button"
           onClick={() => openWorkspace("tailored")}
           className="group rounded-3xl border border-white/10 bg-white/[0.035] p-6 text-left backdrop-blur-xl transition hover:border-purple-400/25 hover:bg-white/[0.06]"
         >
-
           <div className="flex items-center justify-between">
 
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-purple-500/10">
-
               <WandSparkles className="h-5 w-5 text-purple-300" />
-
             </div>
 
             <ChevronRight className="h-5 w-5 text-slate-600 group-hover:text-purple-300" />
 
           </div>
-
 
           <h3 className="mt-5 text-lg font-bold text-white">
             AI Tailored Resume
@@ -982,24 +1712,22 @@ export default function DashboardContent() {
 
         </button>
 
+        {/* JOB MATCHING */}
 
         <button
+          type="button"
           onClick={() => openWorkspace("matching")}
           className="group rounded-3xl border border-white/10 bg-white/[0.035] p-6 text-left backdrop-blur-xl transition hover:border-cyan-400/25 hover:bg-white/[0.06]"
         >
-
           <div className="flex items-center justify-between">
 
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-500/10">
-
               <BriefcaseBusiness className="h-5 w-5 text-cyan-300" />
-
             </div>
 
             <ChevronRight className="h-5 w-5 text-slate-600 group-hover:text-cyan-300" />
 
           </div>
-
 
           <h3 className="mt-5 text-lg font-bold text-white">
             AI Job Matching
@@ -1012,24 +1740,22 @@ export default function DashboardContent() {
 
         </button>
 
+        {/* JOB TRACKER */}
 
         <button
+          type="button"
           onClick={() => openWorkspace("tracker")}
           className="group rounded-3xl border border-white/10 bg-white/[0.035] p-6 text-left backdrop-blur-xl transition hover:border-emerald-400/25 hover:bg-white/[0.06]"
         >
-
           <div className="flex items-center justify-between">
 
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/10">
-
               <ClipboardList className="h-5 w-5 text-emerald-300" />
-
             </div>
 
             <ChevronRight className="h-5 w-5 text-slate-600 group-hover:text-emerald-300" />
 
           </div>
-
 
           <h3 className="mt-5 text-lg font-bold text-white">
             Job Tracker
@@ -1043,1070 +1769,504 @@ export default function DashboardContent() {
         </button>
 
       </section>
-            {/* =====================================================
-          WORKSPACE MODAL / AI TOOL CENTER
+
+
+      {/* =====================================================
+          SINGLE WORKSPACE MODAL
           ===================================================== */}
 
-      {showWorkspace && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      {showWorkspace && activeWorkspace !== "overview" && (
 
-          {/* BACKDROP */}
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeWorkspace();
+            }
+          }}
+        >
 
-          <button
-            type="button"
-            aria-label="Close workspace"
-            onClick={closeWorkspace}
-            className="absolute inset-0 cursor-default bg-black/75 backdrop-blur-md"
-          />
+          <div className="relative max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-[32px] border border-white/10 bg-[#090b12] p-6 shadow-2xl md:p-8">
+
+            {/* CLOSE BUTTON */}
+
+            <button
+              type="button"
+              onClick={closeWorkspace}
+              className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+              aria-label="Close workspace"
+            >
+              <X className="h-5 w-5" />
+            </button>
 
 
-          {/* MODAL */}
+            {/* WORKSPACE HEADER */}
 
-          <div className="relative z-10 flex max-h-[90vh] w-full max-w-6xl overflow-hidden rounded-[32px] border border-white/10 bg-[#080a11]/95 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
+            <div className="pr-12">
 
-            {/* =================================================
-                LEFT WORKSPACE NAVIGATION
-                ================================================= */}
+              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-3 py-1.5 text-xs font-semibold text-indigo-200">
 
-            <aside className="hidden w-64 shrink-0 border-r border-white/10 bg-black/20 p-5 md:block">
+                <Sparkles className="h-3.5 w-3.5" />
 
-              <div className="mb-7 flex items-center gap-3">
-
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20">
-
-                  <Sparkles className="h-5 w-5 text-indigo-300" />
-
-                </div>
-
-                <div>
-
-                  <p className="text-sm font-bold text-white">
-                    Workivo AI
-                  </p>
-
-                  <p className="text-[10px] uppercase tracking-widest text-slate-500">
-                    Workspace
-                  </p>
-
-                </div>
+                WORKIVO INTELLIGENCE
 
               </div>
 
+              <h2 className="text-3xl font-black tracking-tight text-white">
+                {getWorkspaceTitle()}
+              </h2>
 
-              <nav className="space-y-2">
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+                {getWorkspaceDescription()}
+              </p>
 
-                <button
-                  onClick={() => openWorkspace("overview")}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                    activeWorkspace === "overview"
-                      ? "bg-white/10 text-white"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-
-                  <Activity className="h-4 w-4" />
-
-                  Overview
-
-                </button>
-
-
-                <button
-                  onClick={() => openWorkspace("ats")}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                    activeWorkspace === "ats"
-                      ? "bg-indigo-500/15 text-indigo-200"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-
-                  <ScanSearch className="h-4 w-4" />
-
-                  ATS Scanner
-
-                </button>
-
-
-                <button
-                  onClick={() => openWorkspace("tailored")}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                    activeWorkspace === "tailored"
-                      ? "bg-purple-500/15 text-purple-200"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-
-                  <WandSparkles className="h-4 w-4" />
-
-                  Tailored Resume
-
-                </button>
-
-
-                <button
-                  onClick={() => openWorkspace("matching")}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                    activeWorkspace === "matching"
-                      ? "bg-cyan-500/15 text-cyan-200"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-
-                  <BriefcaseBusiness className="h-4 w-4" />
-
-                  Job Matching
-
-                </button>
-
-
-                <button
-                  onClick={() => openWorkspace("tracker")}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                    activeWorkspace === "tracker"
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-
-                  <ClipboardList className="h-4 w-4" />
-
-                  Job Tracker
-
-                </button>
-
-
-                <button
-                  onClick={() => openWorkspace("insights")}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                    activeWorkspace === "insights"
-                      ? "bg-yellow-500/10 text-yellow-200"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-
-                  <BarChart3 className="h-4 w-4" />
-
-                  Career Insights
-
-                </button>
-
-              </nav>
-
-
-              {/* PLAN CARD */}
-
-              <div className="mt-8 rounded-2xl border border-indigo-400/15 bg-gradient-to-br from-indigo-500/10 to-purple-500/5 p-4">
-
-                <div className="flex items-center gap-2">
-
-                  <Crown className="h-4 w-4 text-yellow-400" />
-
-                  <p className="text-xs font-bold text-white">
-                    Free Plan
-                  </p>
-
-                </div>
-
-
-                <p className="mt-2 text-[11px] leading-5 text-slate-500">
-
-                  Upgrade when you need more AI career tools and higher usage limits.
-
-                </p>
-
-
-                <button
-                  type="button"
-                  className="mt-4 w-full rounded-xl bg-yellow-400 px-3 py-2 text-xs font-black text-black transition hover:bg-yellow-300"
-                >
-
-                  Upgrade to Pro
-
-                </button>
-
-              </div>
-
-            </aside>
+            </div>
 
 
             {/* =================================================
-                WORKSPACE CONTENT
+                ATS WORKSPACE
                 ================================================= */}
 
-            <div className="flex min-w-0 flex-1 flex-col">
+            {activeWorkspace === "ats" && (
 
-              {/* MODAL HEADER */}
+              <div className="mt-8 space-y-6">
 
-              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4 md:px-7">
+                <div className="grid gap-5 lg:grid-cols-[1.4fr_0.6fr]">
 
-                <div>
+                  {/* ATS CONTROLS */}
 
-                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-indigo-300">
-                    Workivo Intelligence
-                  </p>
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
 
-                  <h2 className="mt-1 text-xl font-black text-white md:text-2xl">
-                    {getWorkspaceTitle()}
-                  </h2>
+                    <div className="flex items-center gap-3">
 
-                  <p className="mt-1 text-xs text-slate-500 md:text-sm">
-                    {getWorkspaceDescription()}
-                  </p>
-
-                </div>
-
-
-                <button
-                  type="button"
-                  onClick={closeWorkspace}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-400 transition hover:bg-white/10 hover:text-white"
-                >
-
-                  <X className="h-5 w-5" />
-
-                </button>
-
-              </div>
-
-
-              {/* MOBILE NAVIGATION */}
-
-              <div className="flex gap-2 overflow-x-auto border-b border-white/10 p-3 md:hidden">
-
-                {[
-                  {
-                    id: "ats" as const,
-                    label: "ATS",
-                    icon: ScanSearch,
-                  },
-                  {
-                    id: "tailored" as const,
-                    label: "Tailor",
-                    icon: WandSparkles,
-                  },
-                  {
-                    id: "matching" as const,
-                    label: "Jobs",
-                    icon: BriefcaseBusiness,
-                  },
-                  {
-                    id: "tracker" as const,
-                    label: "Tracker",
-                    icon: ClipboardList,
-                  },
-                  {
-                    id: "insights" as const,
-                    label: "Insights",
-                    icon: BarChart3,
-                  },
-                ].map((item) => {
-
-                  const Icon = item.icon;
-
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => openWorkspace(item.id)}
-                      className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold ${
-                        activeWorkspace === item.id
-                          ? "bg-indigo-500/15 text-indigo-200"
-                          : "bg-white/5 text-slate-400"
-                      }`}
-                    >
-
-                      <Icon className="h-3.5 w-3.5" />
-
-                      {item.label}
-
-                    </button>
-                  );
-                })}
-
-              </div>
-
-
-              {/* CONTENT AREA */}
-
-              <div className="flex-1 overflow-y-auto p-5 md:p-7">
-
-
-                {/* =================================================
-                    ATS WORKSPACE
-                    EXISTING WORKING PIPELINE CONNECTED
-                    ================================================= */}
-
-                {activeWorkspace === "ats" && (
-                  <div className="space-y-6">
-
-                    <div className="grid gap-5 lg:grid-cols-[1fr_0.7fr]">
-
-                      <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-6">
-
-                        <div className="flex items-center gap-3">
-
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/15">
-
-                            <ScanSearch className="h-6 w-6 text-indigo-300" />
-
-                          </div>
-
-                          <div>
-
-                            <h3 className="font-bold text-white">
-                              Resume ATS Analysis
-                            </h3>
-
-                            <p className="text-xs text-slate-500">
-                              Powered by your existing AI scan pipeline
-                            </p>
-
-                          </div>
-
-                        </div>
-
-
-                        <div className="mt-6 rounded-2xl border border-white/10 bg-black/20 p-5">
-
-                          <p className="text-xs uppercase tracking-widest text-slate-500">
-                            Selected resume
-                          </p>
-
-                          <p className="mt-2 truncate font-semibold text-white">
-
-                            {latestResume
-                              ? latestResume.file_name
-                              : "No resume uploaded"}
-
-                          </p>
-
-                        </div>
-
-
-                        <div className="mt-5 flex flex-wrap gap-3">
-
-                          <button
-                            onClick={handleUploadClick}
-                            className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
-                          >
-
-                            <UploadCloud className="h-4 w-4" />
-
-                            Upload Resume
-
-                          </button>
-
-
-                          <button
-                            onClick={handleScanResume}
-                            disabled={isScanning}
-                            className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-                          >
-
-                            <ScanSearch className="h-4 w-4" />
-
-                            {isScanning
-                              ? "Scanning..."
-                              : "Scan with AI"}
-
-                          </button>
-
-                        </div>
-
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10">
+                        <ScanSearch className="h-6 w-6 text-indigo-300" />
                       </div>
 
-
-                      <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-500/10 to-purple-500/5 p-6">
-
+                      <div>
                         <p className="text-xs uppercase tracking-widest text-slate-500">
-                          ATS score
+                          Resume analysis
                         </p>
 
-
-                        <div className="mt-3">
-
-                          <span className="text-6xl font-black text-white">
-
-                            {latestResume?.ats_score ?? 0}
-
-                          </span>
-
-                          <span className="ml-1 text-xl font-bold text-indigo-300">
-                            %
-                          </span>
-
-                        </div>
-
-
-                        <p className="mt-3 text-sm leading-6 text-slate-400">
-
-                          {latestResume?.ats_score !== null &&
-                          latestResume?.ats_score !== undefined
-                            ? "Your latest resume has been analyzed."
-                            : "Upload and scan a resume to generate your ATS score."}
-
-                        </p>
-
-                      </div>
-
-                    </div>
-
-
-                    {/* FEEDBACK AREA */}
-
-                    <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-6">
-
-                      <div className="flex items-center gap-3">
-
-                        <Zap className="h-5 w-5 text-yellow-400" />
-
-                        <h3 className="font-bold text-white">
-                          AI Feedback
+                        <h3 className="text-xl font-bold text-white">
+                          ATS compatibility scan
                         </h3>
-
-                      </div>
-
-
-                      <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-5">
-
-                        {latestResume?.ai_feedback ? (
-                          <p className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
-                            {latestResume.ai_feedback}
-                          </p>
-                        ) : (
-                          <p className="text-sm leading-6 text-slate-500">
-                            Your AI feedback will appear here after the
-                            resume scan returns a result.
-                          </p>
-                        )}
-
                       </div>
 
                     </div>
 
-                  </div>
-                )}
+                    <p className="mt-4 text-sm leading-6 text-slate-400">
+                      Upload your resume and run the existing AI
+                      scanning pipeline to calculate your ATS score.
+                    </p>
 
 
-                {/* =================================================
-                    AI TAILORED RESUME WORKSPACE
-                    ================================================= */}
+                    <div className="mt-6 flex flex-wrap gap-3">
 
-                {activeWorkspace === "tailored" && (
-                  <div className="space-y-6">
-
-                    <div className="rounded-3xl border border-purple-400/15 bg-gradient-to-br from-purple-500/10 to-indigo-500/5 p-7">
-
-                      <div className="flex items-center gap-4">
-
-                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-500/15">
-
-                          <WandSparkles className="h-7 w-7 text-purple-300" />
-
-                        </div>
-
-                        <div>
-
-                          <h3 className="text-xl font-black text-white">
-                            AI Tailored Resume
-                          </h3>
-
-                          <p className="mt-1 text-sm text-slate-400">
-                            Build a job-specific version of your resume.
-                          </p>
-
-                        </div>
-
-                      </div>
-
-
-                      <div className="mt-7 grid gap-4 md:grid-cols-2">
-
-                        <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-
-                          <p className="text-xs uppercase tracking-widest text-slate-500">
-                            Resume
-                          </p>
-
-                          <p className="mt-2 truncate text-sm font-semibold text-white">
-
-                            {latestResume
-                              ? latestResume.file_name
-                              : "Upload a resume first"}
-
-                          </p>
-
-                        </div>
-
-
-                        <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-
-                          <p className="text-xs uppercase tracking-widest text-slate-500">
-                            Free usage
-                          </p>
-
-                          <p className="mt-2 text-sm font-semibold text-purple-300">
-
-                            {usage.tailoredResumes}/
-                            {FREE_LIMITS.tailoredResumes} rewrites
-
-                          </p>
-
-                        </div>
-
-                      </div>
-
-
-                      <div className="mt-6 rounded-2xl border border-dashed border-purple-400/20 bg-black/20 p-6">
-
-                        <label className="text-xs font-bold uppercase tracking-widest text-slate-500">
-                          Target job description
-                        </label>
-
-                        <textarea
-                          placeholder="Paste the job description here..."
-                          className="mt-3 min-h-[150px] w-full resize-none rounded-2xl border border-white/10 bg-black/30 p-4 text-sm text-white outline-none placeholder:text-slate-600 focus:border-purple-400/30"
-                        />
-
-                      </div>
+                      <button
+                        type="button"
+                        onClick={handleUploadClick}
+                        className="flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
+                      >
+                        <UploadCloud className="h-4 w-4" />
+                        Upload Resume
+                      </button>
 
 
                       <button
                         type="button"
-                        className="mt-5 flex items-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-3 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5"
+                        onClick={handleScanResume}
+                        disabled={
+                          !latestResume ||
+                          isScanning ||
+                          !canUseATS
+                        }
+                        className="flex items-center gap-2 rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                       >
 
-                        <Sparkles className="h-4 w-4" />
+                        <ScanSearch className="h-4 w-4" />
 
-                        Tailor My Resume
+                        {isScanning
+                          ? "Scanning..."
+                          : "Run ATS Scan"}
 
                       </button>
 
                     </div>
 
+
+                    {!latestResume && (
+                      <div className="mt-5 rounded-2xl border border-amber-400/10 bg-amber-400/5 p-4">
+
+                        <p className="text-xs leading-5 text-amber-200/80">
+                          Upload a PDF resume before running the ATS scanner.
+                        </p>
+
+                      </div>
+                    )}
+
+
+                    {!canUseATS && (
+                      <p className="mt-4 text-xs font-semibold text-amber-300">
+                        You have reached your free ATS scan limit.
+                      </p>
+                    )}
+
                   </div>
-                )}
-                      {/* RECENT ACTIVITY */}
 
-      <section className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur-xl">
 
-        <div className="flex items-center gap-3">
+                  {/* ATS SCORE */}
 
-          <Activity className="h-6 w-6 text-indigo-400" />
+                  <div className="rounded-3xl border border-white/10 bg-black/20 p-6">
 
-          <div>
-            <h2 className="text-xl font-bold text-white">
-              Recent Activity
-            </h2>
+                    <p className="text-xs uppercase tracking-widest text-slate-500">
+                      Current score
+                    </p>
 
-            <p className="mt-1 text-sm text-slate-400">
-              Your latest Workivo activity
-            </p>
-          </div>
+                    <div className="mt-3 flex items-end gap-2">
 
-        </div>
+                      <span className="text-6xl font-black text-white">
+                        {latestResume?.ats_score ?? 0}
+                      </span>
 
+                      <span className="mb-2 text-xl font-bold text-indigo-300">
+                        %
+                      </span>
 
-        <div className="mt-6 space-y-4">
+                    </div>
 
-          {/* RESUME UPLOAD */}
 
-          <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/5">
 
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/20">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-700"
+                        style={{
+                          width: `${Math.min(
+                            Number(latestResume?.ats_score ?? 0),
+                            100
+                          )}%`,
+                        }}
+                      />
 
-              <UploadCloud className="h-5 w-5 text-indigo-300" />
+                    </div>
 
-            </div>
 
+                    <div className="mt-5 flex items-center justify-between">
 
-            <div className="min-w-0 flex-1">
+                      <span className="text-xs text-slate-500">
+                        Free scans
+                      </span>
 
-              <p className="font-medium text-white">
-                Resume uploaded
-              </p>
+                      <span className="text-xs font-bold text-slate-300">
+                        {usage.atsScans}/{FREE_LIMITS.atsScans}
+                      </span>
 
-              <p className="truncate text-sm text-slate-400">
+                    </div>
 
-                {latestResume
-                  ? latestResume.file_name
-                  : "Waiting for your first resume"}
+                  </div>
 
-              </p>
+                </div>
 
-            </div>
 
+                {/* AI FEEDBACK */}
 
-            {latestResume && (
-              <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-            )}
+                <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
 
-          </div>
+                  <div className="flex items-center gap-3">
 
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10">
+                      <Bot className="h-5 w-5 text-emerald-300" />
+                    </div>
 
+                    <div>
 
-          {/* ATS SCAN */}
+                      <p className="text-xs uppercase tracking-widest text-emerald-300">
+                        AI feedback
+                      </p>
 
-          <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4">
+                      <h3 className="font-bold text-white">
+                        Resume recommendations
+                      </h3>
 
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20">
+                    </div>
 
-              <TrendingUp className="h-5 w-5 text-emerald-400" />
+                  </div>
 
-            </div>
 
+                  <div className="mt-4 rounded-2xl border border-white/5 bg-black/20 p-5">
 
-            <div className="min-w-0 flex-1">
+                    {latestResume?.ai_feedback ? (
 
-              <p className="font-medium text-white">
-                ATS scan
-              </p>
+                      <p className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
+                        {latestResume.ai_feedback}
+                      </p>
 
-              <p className="text-sm text-slate-400">
+                    ) : (
 
-                {latestResume?.ats_score !== null &&
-                latestResume?.ats_score !== undefined
+                      <p className="text-sm leading-7 text-slate-500">
+                        Your AI feedback will appear here after you
+                        run an ATS scan.
+                      </p>
 
-                  ? `Completed — ${latestResume.ats_score}% ATS score`
+                    )}
 
-                  : "Upload a resume and run your ATS scan"}
-
-              </p>
-
-            </div>
-
-
-            {latestResume?.ats_score !== null &&
-            latestResume?.ats_score !== undefined && (
-
-              <CheckCircle2 className="h-5 w-5 text-emerald-400" />
-
-            )}
-
-          </div>
-
-
-
-          {/* AI TAILORED RESUME */}
-
-          <button
-            onClick={() => {
-              if (!latestResume) {
-                alert("Please upload a resume first.");
-                return;
-              }
-
-              alert("AI Tailored Resume is ready to connect.");
-            }}
-            className="group flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-left transition hover:border-purple-400/30 hover:bg-purple-500/10"
-          >
-
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20">
-
-              <Sparkles className="h-5 w-5 text-purple-400" />
-
-            </div>
-
-
-            <div className="min-w-0 flex-1">
-
-              <p className="font-medium text-white">
-                AI Tailored Resume
-              </p>
-
-              <p className="text-sm text-slate-400">
-                Rewrite and optimise your resume for a specific job
-              </p>
-
-            </div>
-
-
-            <ArrowUpRight className="h-5 w-5 text-slate-500 transition group-hover:text-purple-300" />
-
-          </button>
-
-
-
-          {/* JOB MATCHING */}
-
-          <button
-            onClick={() => {
-              if (!latestResume) {
-                alert("Please upload a resume first.");
-                return;
-              }
-
-              alert("Job Matching is ready to connect.");
-            }}
-            className="group flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-left transition hover:border-cyan-400/30 hover:bg-cyan-500/10"
-          >
-
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20">
-
-              <ArrowUpRight className="h-5 w-5 text-cyan-400" />
-
-            </div>
-
-
-            <div className="min-w-0 flex-1">
-
-              <p className="font-medium text-white">
-                Smart Job Matching
-              </p>
-
-              <p className="text-sm text-slate-400">
-                Discover opportunities that fit your resume
-              </p>
-
-            </div>
-
-
-            <ArrowUpRight className="h-5 w-5 text-slate-500 transition group-hover:text-cyan-300" />
-
-          </button>
-
-
-
-          {/* JOB TRACKER */}
-
-          <button
-            onClick={() => {
-              alert("Job Tracker is ready to connect.");
-            }}
-            className="group flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-black/20 p-4 text-left transition hover:border-emerald-400/30 hover:bg-emerald-500/10"
-          >
-
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20">
-
-              <Activity className="h-5 w-5 text-emerald-400" />
-
-            </div>
-
-
-            <div className="min-w-0 flex-1">
-
-              <p className="font-medium text-white">
-                Job Tracker
-              </p>
-
-              <p className="text-sm text-slate-400">
-                Track applications, interviews and opportunities
-              </p>
-
-            </div>
-
-
-            <ArrowUpRight className="h-5 w-5 text-slate-500 transition group-hover:text-emerald-300" />
-
-          </button>
-
-        </div>
-
-      </section>
-
-
-
-      {/* AI CAREER SUGGESTIONS */}
-
-      <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/10 to-white/5 p-8 backdrop-blur-xl">
-
-        <div className="flex items-center gap-3">
-
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-yellow-500/10">
-
-            <Zap className="h-6 w-6 text-yellow-400" />
-
-          </div>
-
-
-          <div>
-
-            <h2 className="text-xl font-bold text-white">
-              AI Career Suggestions
-            </h2>
-
-            <p className="text-sm text-slate-400">
-              Powered by Workivo intelligence
-            </p>
-
-          </div>
-
-        </div>
-
-
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-
-          {[
-            {
-              title: "Strengthen your achievements",
-              description:
-                "Add measurable results and outcomes to your experience.",
-            },
-
-            {
-              title: "Improve your professional summary",
-              description:
-                "Make your opening section clearer and more targeted.",
-            },
-
-            {
-              title: "Increase ATS keyword matching",
-              description:
-                "Use relevant keywords from the job description naturally.",
-            },
-
-            {
-              title: "Tailor your resume",
-              description:
-                "Create a job-specific version using Workivo AI.",
-            },
-          ].map((item) => (
-
-            <div
-              key={item.title}
-              className="rounded-2xl border border-white/10 bg-black/20 p-5 transition hover:border-white/20"
-            >
-
-              <div className="flex items-start gap-3">
-
-                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
-
-                <div>
-
-                  <p className="font-medium text-white">
-                    {item.title}
-                  </p>
-
-                  <p className="mt-1 text-sm leading-6 text-slate-400">
-                    {item.description}
-                  </p>
+                  </div>
 
                 </div>
 
               </div>
 
-            </div>
-
-          ))}
-
-        </div>
-
-      </section>
+            )}
 
 
+            {/* =================================================
+                TAILORED RESUME
+                ================================================= */}
 
-      {/* PLANS */}
+            {activeWorkspace === "tailored" && (
 
-      <section className="grid gap-6 lg:grid-cols-2">
+              <div className="mt-8 rounded-3xl border border-purple-400/10 bg-purple-500/[0.04] p-8 text-center">
 
-        {/* FREE */}
-
-        <div className="rounded-3xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/20 via-purple-500/10 to-transparent p-8">
-
-          <div className="flex items-center justify-between">
-
-            <div className="flex items-center gap-3">
-
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20">
-
-                <Sparkles className="h-6 w-6 text-indigo-300" />
-
-              </div>
-
-              <h2 className="text-xl font-bold text-white">
-                Free Plan
-              </h2>
-
-            </div>
-
-
-            <span className="rounded-full border border-indigo-400/20 bg-indigo-500/10 px-3 py-1 text-xs font-semibold text-indigo-300">
-              FREE
-            </span>
-
-          </div>
-
-
-          <p className="mt-5 text-slate-300">
-            Start building a stronger job search with essential Workivo AI tools.
-          </p>
-
-
-
-          <div className="mt-7 space-y-4">
-
-            {[
-              "3 ATS resume scans",
-              "3 AI tailored resume rewrites",
-              "2 smart job matches",
-              "5 tracked job applications",
-            ].map((item) => (
-
-              <div
-                key={item}
-                className="flex items-center gap-3 text-slate-200"
-              >
-
-                <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
-
-                <span>{item}</span>
-
-              </div>
-
-            ))}
-
-          </div>
-
-
-          <div className="mt-7 rounded-2xl border border-white/10 bg-black/20 p-4">
-
-            <p className="text-xs uppercase tracking-widest text-slate-500">
-              Current usage
-            </p>
-
-            <div className="mt-3 space-y-2 text-sm">
-
-              <div className="flex justify-between text-slate-300">
-                <span>Resumes</span>
-                <span className="font-semibold text-white">
-                  {resumeCount} / 3
-                </span>
-              </div>
-
-              <div className="flex justify-between text-slate-300">
-                <span>ATS scans</span>
-                <span className="font-semibold text-white">
-                  {latestResume?.ats_score !== null &&
-                  latestResume?.ats_score !== undefined
-                    ? "1 / 3"
-                    : "0 / 3"}
-                </span>
-              </div>
-
-              <div className="flex justify-between text-slate-300">
-                <span>Tailored resumes</span>
-                <span className="font-semibold text-white">
-                  0 / 3
-                </span>
-              </div>
-
-              <div className="flex justify-between text-slate-300">
-                <span>Job matches</span>
-                <span className="font-semibold text-white">
-                  0 / 2
-                </span>
-              </div>
-
-              <div className="flex justify-between text-slate-300">
-                <span>Tracked applications</span>
-                <span className="font-semibold text-white">
-                  0 / 5
-                </span>
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-
-
-        {/* PRO */}
-
-        <div className="relative overflow-hidden rounded-3xl border border-yellow-500/30 bg-gradient-to-br from-yellow-500/20 via-orange-500/10 to-transparent p-8">
-
-          <div className="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-yellow-400/10 blur-3xl" />
-
-
-          <div className="relative">
-
-            <div className="flex items-center justify-between">
-
-              <div className="flex items-center gap-3">
-
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-yellow-400/10">
-
-                  <Crown className="h-6 w-6 text-yellow-400" />
-
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-purple-500/10">
+                  <WandSparkles className="h-8 w-8 text-purple-300" />
                 </div>
 
-                <h2 className="text-xl font-bold text-white">
-                  Pro Plan
-                </h2>
+                <h3 className="mt-5 text-2xl font-black text-white">
+                  AI Tailored Resume
+                </h3>
 
-              </div>
+                <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-400">
+                  Your resume tailoring workspace is ready.
+                  Upload a resume and provide a target job
+                  description to generate a job-specific version.
+                </p>
 
-
-              <span className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-1 text-xs font-semibold text-yellow-300">
-                $10 / MONTH
-              </span>
-
-            </div>
-
-
-            <p className="mt-5 text-slate-300">
-              Unlock unlimited AI career tools and remove the limits.
-            </p>
-
-
-            <ul className="mt-7 space-y-4">
-
-              {[
-                "Unlimited ATS scans",
-                "Unlimited AI tailored resumes",
-                "Unlimited smart job matching",
-                "Unlimited job tracking",
-                "Priority AI assistance",
-              ].map((item) => (
-
-                <li
-                  key={item}
-                  className="flex items-center gap-3 text-slate-200"
+                <button
+                  type="button"
+                  onClick={handleUploadClick}
+                  className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-900 transition hover:bg-slate-100"
                 >
+                  <UploadCloud className="h-4 w-4" />
+                  Upload Resume
+                </button>
 
-                  <CheckCircle2 className="h-5 w-5 shrink-0 text-yellow-400" />
+              </div>
 
-                  {item}
-
-                </li>
-
-              ))}
-
-            </ul>
+            )}
 
 
-            <button
-              className="mt-8 rounded-2xl bg-yellow-400 px-8 py-3 font-bold text-black transition hover:scale-105"
-            >
-              Upgrade to Pro
-            </button>
+            {/* =================================================
+                JOB MATCHING
+                ================================================= */}
+
+            {activeWorkspace === "matching" && (
+
+              <div className="mt-8 rounded-3xl border border-cyan-400/10 bg-cyan-500/[0.04] p-8 text-center">
+
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-500/10">
+                  <BriefcaseBusiness className="h-8 w-8 text-cyan-300" />
+                </div>
+
+                <h3 className="mt-5 text-2xl font-black text-white">
+                  AI Job Matching
+                </h3>
+
+                <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-400">
+                  Find relevant opportunities based on your
+                  resume, skills and career direction.
+                </p>
+
+                <div className="mx-auto mt-6 max-w-xl rounded-2xl border border-cyan-400/10 bg-cyan-500/5 p-5 text-left">
+
+                  <div className="flex items-center gap-3">
+
+                    <Activity className="h-5 w-5 text-cyan-300" />
+
+                    <p className="text-sm font-semibold text-cyan-100">
+                      Job matching engine
+                    </p>
+
+                  </div>
+
+                  <p className="mt-2 text-xs leading-6 text-slate-500">
+                    Your job-matching backend can be connected
+                    here without changing the existing resume pipeline.
+                  </p>
+
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!latestResume || !canUseMatching}
+                  className="mt-6 rounded-2xl bg-cyan-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Find Matching Jobs
+                </button>
+
+              </div>
+
+            )}
+
+
+            {/* =================================================
+                JOB TRACKER
+                ================================================= */}
+
+            {activeWorkspace === "tracker" && (
+
+              <div className="mt-8 rounded-3xl border border-emerald-400/10 bg-emerald-500/[0.04] p-8 text-center">
+
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10">
+                  <ClipboardList className="h-8 w-8 text-emerald-300" />
+                </div>
+
+                <h3 className="mt-5 text-2xl font-black text-white">
+                  Job Tracker
+                </h3>
+
+                <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-400">
+                  Keep your applications organized and track
+                  every stage of your job search.
+                </p>
+
+                <div className="mx-auto mt-6 grid max-w-2xl gap-3 sm:grid-cols-3">
+
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <p className="text-2xl font-black text-white">
+                      {usage.trackedApplications}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Applications
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <p className="text-2xl font-black text-white">
+                      0
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Interviews
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                    <p className="text-2xl font-black text-white">
+                      0
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Offers
+                    </p>
+                  </div>
+
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!canUseTracker}
+                  className="mt-6 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Add Application
+                </button>
+
+              </div>
+
+            )}
+
+
+            {/* =================================================
+                CAREER INSIGHTS
+                ================================================= */}
+
+            {activeWorkspace === "insights" && (
+
+              <div className="mt-8 space-y-5">
+
+                <div className="grid gap-5 md:grid-cols-3">
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+
+                    <TrendingUp className="h-6 w-6 text-indigo-300" />
+
+                    <p className="mt-4 text-xs uppercase tracking-widest text-slate-500">
+                      ATS performance
+                    </p>
+
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {latestResume?.ats_score ?? 0}%
+                    </p>
+
+                  </div>
+
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+
+                    <FileText className="h-6 w-6 text-purple-300" />
+
+                    <p className="mt-4 text-xs uppercase tracking-widest text-slate-500">
+                      Resume library
+                    </p>
+
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {resumeCount}
+                    </p>
+
+                  </div>
+
+
+                  <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+
+                    <Zap className="h-6 w-6 text-cyan-300" />
+
+                    <p className="mt-4 text-xs uppercase tracking-widest text-slate-500">
+                      ATS scans remaining
+                    </p>
+
+                    <p className="mt-2 text-3xl font-black text-white">
+                      {Math.max(
+                        FREE_LIMITS.atsScans - usage.atsScans,
+                        0
+                      )}
+                    </p>
+
+                  </div>
+
+                </div>
+
+
+                <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
+
+                  <div className="flex items-center gap-3">
+
+                    <BarChart3 className="h-5 w-5 text-indigo-300" />
+
+                    <h3 className="font-bold text-white">
+                      Career intelligence
+                    </h3>
+
+                  </div>
+
+                  <p className="mt-3 text-sm leading-7 text-slate-400">
+                    As more resume scans, applications and job
+                    matches are connected to your backend, this
+                    workspace can display deeper career analytics.
+                  </p>
+
+                </div>
+
+              </div>
+
+            )}
 
           </div>
 
         </div>
+      )}
 
-      </section>
-
-
-
-      {/* FLOATING WORKIVO AI */}
-
-      <button
-        onClick={() => alert("Workivo AI assistant is ready to connect.")}
-        className="fixed bottom-8 right-8 z-50 flex items-center gap-3 rounded-full border border-white/10 bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 font-semibold text-white shadow-2xl shadow-indigo-900/40 backdrop-blur-xl transition hover:scale-105"
-      >
-
-        <Bot className="h-5 w-5" />
-
-        <span>
-          Ask Workivo AI
-        </span>
-
-      </button>
-
+      {/* =====================================================
+          END OF DASHBOARD
+          ===================================================== */}
 
     </main>
-
   );
 }
+
