@@ -33,6 +33,14 @@ export default function DashboardContent() {
   const [isScanning, setIsScanning] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
+  const [isTailoring, setIsTailoring] = useState(false);
+
+const [jobDescription, setJobDescription] =
+  useState("");
+
+const [tailoredResume, setTailoredResume] =
+  useState<string | null>(null);
+
   /* =========================================================
      FREE PLAN LIMITS
      ========================================================= */
@@ -595,6 +603,102 @@ export default function DashboardContent() {
         ats_score: atsScore,
         ai_feedback: feedback,
       });
+      const handleTailorResume = async () => {
+  if (!latestResume) {
+    alert("Please upload a resume first.");
+    return;
+  }
+
+  if (!jobDescription.trim()) {
+    alert("Please enter a job description.");
+    return;
+  }
+
+  if (!canUseTailoredResume) {
+    alert(
+      "You have reached your free tailored resume limit."
+    );
+    return;
+  }
+
+  if (isTailoring) return;
+
+  setIsTailoring(true);
+
+  try {
+    const {
+      data,
+      error,
+    } = await supabase.functions.invoke(
+      "tailor-resume",
+      {
+        body: {
+          resume_text:
+            latestResume.resume_text || "",
+
+          job_description:
+            jobDescription.trim(),
+        },
+      }
+    );
+
+    if (error) {
+      console.error(
+        "TAILOR FUNCTION ERROR:",
+        error
+      );
+
+      throw new Error(
+        error.message ||
+          "AI resume tailoring failed."
+      );
+    }
+
+    if (!data || typeof data !== "object") {
+      throw new Error(
+        "Invalid AI tailoring response."
+      );
+    }
+
+    const tailoredText =
+      typeof data.tailored_resume === "string"
+        ? data.tailored_resume
+        : "";
+
+    if (!tailoredText.trim()) {
+      throw new Error(
+        "AI did not return a tailored resume."
+      );
+    }
+
+    setTailoredResume(
+      tailoredText
+    );
+
+    setUsage((previousUsage) => ({
+      ...previousUsage,
+      tailoredResumes:
+        previousUsage.tailoredResumes + 1,
+    }));
+
+    alert(
+      "Your resume has been tailored successfully!"
+    );
+  } catch (error) {
+    console.error(
+      "TAILOR RESUME ERROR:",
+      error
+    );
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "AI resume tailoring failed."
+    );
+  } finally {
+    setIsTailoring(false);
+  }
+};
 
       /* -----------------------------------------------------
          UPDATE UI USAGE
@@ -1243,82 +1347,173 @@ export default function DashboardContent() {
   /* =========================================================
      TAILORED RESUME WORKSPACE
      ========================================================= */
-
   const renderTailoredWorkspace = () => {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
-              AI Resume Co-pilot
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
+            AI Resume Co-pilot
+          </p>
+
+          <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+            AI Resume Writer
+          </h2>
+
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Tailor your resume to a specific job.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={closeWorkspace}
+          className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+
+        {/* LEFT SIDE */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+              <WandSparkles className="h-5 w-5" />
+            </div>
+
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-white">
+                Tailor Resume
+              </h3>
+
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Match your resume to the job description.
+              </p>
+            </div>
+          </div>
+
+          {/* CURRENT RESUME */}
+
+          <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Current Resume
             </p>
 
-            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
-              AI Resume Writer
-            </h2>
-
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Tailor your resume for a specific opportunity.
+            <p className="mt-2 truncate text-sm font-medium text-slate-700 dark:text-slate-300">
+              {latestResume?.file_name
+                ?.split("/")
+                .pop() ||
+                "No resume selected"}
             </p>
           </div>
+
+          {/* JOB DESCRIPTION */}
+
+          <div className="mt-6">
+            <label className="text-sm font-semibold text-slate-900 dark:text-white">
+              Job Description
+            </label>
+
+            <textarea
+              value={jobDescription}
+              onChange={(event) =>
+                setJobDescription(
+                  event.target.value
+                )
+              }
+              placeholder="Paste the job description here..."
+              rows={10}
+              className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-900 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+            />
+          </div>
+
+          {/* BUTTON */}
 
           <button
             type="button"
-            onClick={closeWorkspace}
-            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+            onClick={handleTailorResume}
+            disabled={
+              !latestResume ||
+              !jobDescription.trim() ||
+              isTailoring ||
+              !canUseTailoredResume
+            }
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <X className="h-5 w-5" />
+            {isTailoring ? (
+              <>
+                <Activity className="h-4 w-4 animate-pulse" />
+                Tailoring Resume...
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4" />
+                Tailor Resume
+              </>
+            )}
           </button>
+
+          <p className="mt-3 text-center text-xs text-slate-400">
+            {usage.tailoredResumes}/
+            {FREE_LIMITS.tailoredResumes} free rewrites used
+          </p>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="mx-auto max-w-2xl text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
-              <WandSparkles className="h-7 w-7" />
+        {/* RIGHT SIDE */}
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+              <FileText className="h-5 w-5" />
             </div>
 
-            <h3 className="mt-5 text-xl font-bold text-slate-900 dark:text-white">
-              Tailor your resume with AI
-            </h3>
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-white">
+                Tailored Resume
+              </h3>
 
-            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-              This workspace is ready for the AI resume
-              rewriting pipeline.
-            </p>
-
-            <div className="mt-6 rounded-xl bg-slate-50 p-5 text-left dark:bg-slate-800/60">
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                Current resume
-              </p>
-
-              <p className="mt-2 truncate text-sm text-slate-500 dark:text-slate-400">
-                {latestResume?.file_name?.split("/").pop() ||
-                  "No resume selected"}
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Your AI-generated resume will appear here.
               </p>
             </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                alert(
-                  "AI Resume Writer pipeline coming next."
-                )
-              }
-              className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-purple-700"
-            >
-              <Sparkles className="h-4 w-4" />
-              Start AI Rewrite
-            </button>
-
-            <p className="mt-3 text-xs text-slate-400">
-              {usage.tailoredResumes}/
-              {FREE_LIMITS.tailoredResumes} free rewrites used
-            </p>
           </div>
+
+          {tailoredResume ? (
+            <div className="mt-6">
+              <div className="max-h-[600px] overflow-y-auto rounded-xl bg-slate-50 p-5 dark:bg-slate-800/60">
+                <pre className="whitespace-pre-wrap font-sans text-sm leading-7 text-slate-700 dark:text-slate-300">
+                  {tailoredResume}
+                </pre>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 flex min-h-[400px] items-center justify-center rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
+              <div>
+                <WandSparkles className="mx-auto h-8 w-8 text-slate-400" />
+
+                <p className="mt-3 font-medium text-slate-700 dark:text-slate-300">
+                  No tailored resume yet
+                </p>
+
+                <p className="mt-1 max-w-sm text-sm leading-6 text-slate-500">
+                  Paste a job description and click
+                  "Tailor Resume" to generate your customized resume.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
-    );
-  };
+    </div>
+  );
+};
+  
+
+  
 
   /* =========================================================
      JOB MATCHING WORKSPACE
