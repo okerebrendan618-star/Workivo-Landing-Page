@@ -11,7 +11,7 @@ import Footer from '@/components/landing/Footer';
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-[#0a0a0f] text-slate-50 font-sans selection:bg-indigo-500/30">
+    <div className="min-h-screen workivo-ai-bg text-slate-50 font-sans selection:bg-indigo-500/30">
       <Navbar />
       <main>
         <Hero />
