@@ -469,6 +469,102 @@ const [tailoredResume, setTailoredResume] =
      
      The Make webhook URL therefore never reaches the browser.
      ========================================================= */
+   const handleTailorResume = async () => {
+  if (!latestResume) {
+    alert("Please upload a resume first.");
+    return;
+  }
+
+  if (!jobDescription.trim()) {
+    alert("Please enter a job description.");
+    return;
+  }
+
+  if (!canUseTailoredResume) {
+    alert(
+      "You have reached your free tailored resume limit."
+    );
+    return;
+  }
+
+  if (isTailoring) return;
+
+  setIsTailoring(true);
+
+  try {
+    const {
+      data,
+      error,
+    } = await supabase.functions.invoke(
+      "tailor-resume",
+      {
+        body: {
+          resume_text:
+            latestResume.resume_text || "",
+
+          job_description:
+            jobDescription.trim(),
+        },
+      }
+    );
+
+    if (error) {
+      console.error(
+        "TAILOR FUNCTION ERROR:",
+        error
+      );
+
+      throw new Error(
+        error.message ||
+          "AI resume tailoring failed."
+      );
+    }
+
+    if (!data || typeof data !== "object") {
+      throw new Error(
+        "Invalid AI tailoring response."
+      );
+    }
+
+    const tailoredText =
+      typeof data.tailored_resume === "string"
+        ? data.tailored_resume
+        : "";
+
+    if (!tailoredText.trim()) {
+      throw new Error(
+        "AI did not return a tailored resume."
+      );
+    }
+
+    setTailoredResume(
+      tailoredText
+    );
+
+    setUsage((previousUsage) => ({
+      ...previousUsage,
+      tailoredResumes:
+        previousUsage.tailoredResumes + 1,
+    }));
+
+    alert(
+      "Your resume has been tailored successfully!"
+    );
+  } catch (error) {
+    console.error(
+      "TAILOR RESUME ERROR:",
+      error
+    );
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "AI resume tailoring failed."
+    );
+  } finally {
+    setIsTailoring(false);
+  }
+};
 
   const handleScanResume = async () => {
     if (!latestResume) {
@@ -603,102 +699,7 @@ const [tailoredResume, setTailoredResume] =
         ats_score: atsScore,
         ai_feedback: feedback,
       });
-      const handleTailorResume = async () => {
-  if (!latestResume) {
-    alert("Please upload a resume first.");
-    return;
-  }
-
-  if (!jobDescription.trim()) {
-    alert("Please enter a job description.");
-    return;
-  }
-
-  if (!canUseTailoredResume) {
-    alert(
-      "You have reached your free tailored resume limit."
-    );
-    return;
-  }
-
-  if (isTailoring) return;
-
-  setIsTailoring(true);
-
-  try {
-    const {
-      data,
-      error,
-    } = await supabase.functions.invoke(
-      "tailor-resume",
-      {
-        body: {
-          resume_text:
-            latestResume.resume_text || "",
-
-          job_description:
-            jobDescription.trim(),
-        },
-      }
-    );
-
-    if (error) {
-      console.error(
-        "TAILOR FUNCTION ERROR:",
-        error
-      );
-
-      throw new Error(
-        error.message ||
-          "AI resume tailoring failed."
-      );
-    }
-
-    if (!data || typeof data !== "object") {
-      throw new Error(
-        "Invalid AI tailoring response."
-      );
-    }
-
-    const tailoredText =
-      typeof data.tailored_resume === "string"
-        ? data.tailored_resume
-        : "";
-
-    if (!tailoredText.trim()) {
-      throw new Error(
-        "AI did not return a tailored resume."
-      );
-    }
-
-    setTailoredResume(
-      tailoredText
-    );
-
-    setUsage((previousUsage) => ({
-      ...previousUsage,
-      tailoredResumes:
-        previousUsage.tailoredResumes + 1,
-    }));
-
-    alert(
-      "Your resume has been tailored successfully!"
-    );
-  } catch (error) {
-    console.error(
-      "TAILOR RESUME ERROR:",
-      error
-    );
-
-    alert(
-      error instanceof Error
-        ? error.message
-        : "AI resume tailoring failed."
-    );
-  } finally {
-    setIsTailoring(false);
-  }
-};
+     
 
       /* -----------------------------------------------------
          UPDATE UI USAGE
