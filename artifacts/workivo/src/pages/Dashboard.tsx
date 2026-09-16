@@ -13,19 +13,43 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function checkUser() {
-      const { data } = await supabase.auth.getSession();
+    let mounted = true;
 
-      if (!data.session) {
+    async function checkUser() {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (!mounted) return;
+
+      // No authenticated user
+      if (error || !user) {
         setLocation("/login");
         return;
       }
 
-      setUserEmail(data.session.user.email ?? "");
+      // Authenticated but email is not confirmed
+      if (!user.email_confirmed_at) {
+        await supabase.auth.signOut();
+
+        if (mounted) {
+          setLocation("/login");
+        }
+
+        return;
+      }
+
+      // Authenticated + verified
+      setUserEmail(user.email ?? "");
       setLoading(false);
     }
 
     checkUser();
+
+    return () => {
+      mounted = false;
+    };
   }, [setLocation]);
 
   async function handleLogout() {
@@ -38,6 +62,7 @@ export default function Dashboard() {
       <div className="flex min-h-screen items-center justify-center bg-[#09090f]">
         <div className="text-center">
           <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
+
           <p className="text-slate-400">
             Loading Workivo...
           </p>
@@ -48,11 +73,9 @@ export default function Dashboard() {
 
   return (
     <div className="flex min-h-screen bg-[#09090f] text-white">
-
       <Sidebar />
 
       <div className="flex flex-1 flex-col">
-
         <Topbar
           email={userEmail}
           onLogout={handleLogout}
@@ -61,9 +84,7 @@ export default function Dashboard() {
         <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-10">
           <DashboardContent />
         </main>
-
       </div>
-
     </div>
   );
 }
