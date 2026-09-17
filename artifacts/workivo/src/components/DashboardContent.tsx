@@ -54,6 +54,29 @@ export default function DashboardContent() {
     useState<any[]>([]);
 
   /* =========================================================
+     WORKIVO BOT UI
+
+     This is the frontend shell for the Workivo assistant.
+     The AI/backend connection can be added later without
+     changing the floating UI.
+     ========================================================= */
+
+  type BotMessage = {
+    role: "user" | "assistant";
+    text: string;
+  };
+
+  const [isBotOpen, setIsBotOpen] = useState(false);
+  const [botInput, setBotInput] = useState("");
+  const [botMessages, setBotMessages] = useState<BotMessage[]>([
+    {
+      role: "assistant",
+      text:
+        "Hey 👋 I’m Workivo Bot. I’ll be able to help with your resume, ATS score, job matches, and applications soon.",
+    },
+  ]);
+
+  /* =========================================================
      FREE PLAN LIMITS
      ========================================================= */
 
@@ -148,84 +171,221 @@ export default function DashboardContent() {
   };
 
   /* =========================================================
-     LOAD USER RESUME AFTER REFRESH
+     SUPABASE PERSISTENCE HELPERS
+     ========================================================= */
+
+  const persistUsage = async (
+    userId: string,
+    nextUsage: {
+      atsScans: number;
+      tailoredResumes: number;
+      jobMatches: number;
+      trackedApplications: number;
+    }
+  ) => {
+    /*
+     * Update the existing row when it exists. If the user does
+     * not have a usage row yet, create one with the authenticated
+     * user's ID.
+     */
+    const {
+      data: existingUsageRows,
+      error: lookupError,
+    } = await supabase
+      .from("user_usage")
+      .select("user_id")
+      .eq("user_id", userId)
+      .limit(1);
+
+    const existingUsage =
+      existingUsageRows?.[0] ?? null;
+
+    if (lookupError) {
+      throw new Error(
+        `Usage lookup failed: ${lookupError.message}`
+      );
+    }
+
+    const payload = {
+      ats_scans: nextUsage.atsScans,
+      tailored_resumes: nextUsage.tailoredResumes,
+      job_matches: nextUsage.jobMatches,
+      tracked_applications: nextUsage.trackedApplications,
+    };
+
+    if (existingUsage) {
+      const { error: updateError } = await supabase
+        .from("user_usage")
+        .update(payload)
+        .eq("user_id", userId);
+
+      if (updateError) {
+        throw new Error(
+          `Usage update failed: ${updateError.message}`
+        );
+      }
+
+      return;
+    }
+
+    const { error: insertError } = await supabase
+      .from("user_usage")
+      .insert({
+        user_id: userId,
+        ...payload,
+      });
+
+    if (insertError) {
+      throw new Error(
+        `Usage insert failed: ${insertError.message}`
+      );
+    }
+  };
+
+  const loadPersistentDashboardData = async () => {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError) {
+      console.error("AUTH ERROR:", authError);
+      return;
+    }
+
+    if (!user) return;
+
+    const [
+      latestResumeResult,
+      resumeCountResult,
+      usageResult,
+      tailoredResult,
+    ] = await Promise.all([
+      supabase
+        .from("resumes")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        })
+        .limit(1)
+        .maybeSingle(),
+
+      supabase
+        .from("resumes")
+        .select("*", {
+          count: "exact",
+          head: true,
+        })
+        .eq("user_id", user.id),
+
+      supabase
+        .from("user_usage")
+        .select(
+          "ats_scans, tailored_resumes, job_matches, tracked_applications"
+        )
+        .eq("user_id", user.id)
+        .maybeSingle(),
+
+      supabase
+        .from("tailored_resumes")
+        .select(
+          "id, resume_id, job_description, tailored_resume, created_at"
+        )
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    if (latestResumeResult.error) {
+      console.error(
+        "LATEST RESUME ERROR:",
+        latestResumeResult.error
+      );
+    } else if (latestResumeResult.data) {
+      setLatestResume(latestResumeResult.data);
+    }
+
+    if (resumeCountResult.error) {
+      console.error(
+        "RESUME COUNT ERROR:",
+        resumeCountResult.error
+      );
+    } else {
+      setResumeCount(resumeCountResult.count || 0);
+    }
+
+    if (usageResult.error) {
+      console.error(
+        "USAGE LOAD ERROR:",
+        usageResult.error
+      );
+    } else if (usageResult.data) {
+      setUsage({
+        atsScans: Number(usageResult.data.ats_scans) || 0,
+        tailoredResumes:
+          Number(usageResult.data.tailored_resumes) || 0,
+        jobMatches:
+          Number(usageResult.data.job_matches) || 0,
+        trackedApplications:
+          Number(usageResult.data.tracked_applications) || 0,
+      });
+    } else {
+      try {
+        await persistUsage(user.id, {
+          atsScans: 0,
+          tailoredResumes: 0,
+          jobMatches: 0,
+          trackedApplications: 0,
+        });
+      } catch (error) {
+        console.error(
+          "INITIAL USAGE CREATE ERROR:",
+          error
+        );
+      }
+    }
+
+    if (tailoredResult.error) {
+      console.error(
+        "TAILORED RESUME LOAD ERROR:",
+        tailoredResult.error
+      );
+    } else if (tailoredResult.data) {
+      setTailoredResume(
+        tailoredResult.data.tailored_resume || null
+      );
+
+      setJobDescription(
+        tailoredResult.data.job_description || ""
+      );
+    }
+  };
+
+  /* =========================================================
+     LOAD USER DATA AFTER REFRESH
      ========================================================= */
 
   useEffect(() => {
     let isMounted = true;
 
-    const getLatestResume = async () => {
+    const load = async () => {
       try {
-        const {
-          data: { user },
-          error: authError,
-        } = await supabase.auth.getUser();
-
-        if (authError) {
-          console.error(
-            "AUTH ERROR:",
-            authError
-          );
-          return;
-        }
-
-        if (!user) return;
-
-        const {
-          data,
-          error,
-        } = await supabase
-          .from("resumes")
-          .select("*")
-          .eq("user_id", user.id)
-          .order("created_at", {
-            ascending: false,
-          })
-          .limit(1)
-          .maybeSingle();
-
-        if (!error && data && isMounted) {
-          setLatestResume(data);
-        }
-
-        if (error) {
-          console.error(
-            "LATEST RESUME ERROR:",
-            error
-          );
-        }
-
-        const {
-          count,
-          error: countError,
-        } = await supabase
-          .from("resumes")
-          .select("*", {
-            count: "exact",
-            head: true,
-          })
-          .eq("user_id", user.id);
-
-        if (countError) {
-          console.error(
-            "RESUME COUNT ERROR:",
-            countError
-          );
-          return;
-        }
-
-        if (isMounted) {
-          setResumeCount(count || 0);
-        }
+        await loadPersistentDashboardData();
       } catch (error) {
         console.error(
-          "RESUME LOAD ERROR:",
+          "DASHBOARD DATA LOAD ERROR:",
           error
         );
       }
     };
 
-    getLatestResume();
+    if (isMounted) {
+      load();
+    }
 
     return () => {
       isMounted = false;
@@ -289,179 +449,180 @@ export default function DashboardContent() {
         resetFileInput();
         return;
       }
+          
 
-      /* -----------------------------------------------------
-         GET AUTHENTICATED USER BEFORE STORAGE WORK
-         ----------------------------------------------------- */
+        /* -----------------------------------------------------
+           GET AUTHENTICATED USER BEFORE STORAGE WORK
+           ----------------------------------------------------- */
 
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser();
 
-      if (authError) {
-        console.error(
-          "AUTH ERROR:",
-          authError
-        );
+        if (authError) {
+          console.error(
+            "AUTH ERROR:",
+            authError
+          );
 
-        alert("Unable to verify your account.");
-        resetFileInput();
-        return;
-      }
+          alert("Unable to verify your account.");
+          resetFileInput();
+          return;
+        }
 
-      if (!user) {
-        alert("Please login first.");
-        resetFileInput();
-        return;
-      }
+        if (!user) {
+          alert("Please login first.");
+          resetFileInput();
+          return;
+        }
 
-      /* -----------------------------------------------------
-         USER-SCOPED STORAGE PATH
-         
-         This avoids using a globally exposed/random root-level
-         filename.
-         ----------------------------------------------------- */
+        /* -----------------------------------------------------
+           USER-SCOPED STORAGE PATH
+           
+           This avoids using a globally exposed/random root-level
+           filename.
+           ----------------------------------------------------- */
 
-      const safeFileName = file.name
-        .replace(/[^a-zA-Z0-9._-]/g, "_")
-        .replace(/\.pdf$/i, ".pdf");
+        const safeFileName = file.name
+          .replace(/[^a-zA-Z0-9._-]/g, "_")
+          .replace(/\.pdf$/i, ".pdf");
 
-      const fileName =
-        `${user.id}/${Date.now()}-${safeFileName}`;
+        const fileName =
+          `${user.id}/${Date.now()}-${safeFileName}`;
 
-      uploadedFileName = fileName;
+        uploadedFileName = fileName;
 
-      /* -----------------------------------------------------
-         UPLOAD TO SUPABASE STORAGE
-         ----------------------------------------------------- */
+        /* -----------------------------------------------------
+           UPLOAD TO SUPABASE STORAGE
+           ----------------------------------------------------- */
 
-      const {
-        error: uploadError,
-      } = await supabase.storage
-        .from("resumes")
-        .upload(fileName, file, {
-          contentType: "application/pdf",
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error(
-          "STORAGE UPLOAD ERROR:",
-          uploadError
-        );
-
-        alert(
-          `Resume upload failed: ${uploadError.message}`
-        );
-
-        resetFileInput();
-        return;
-      }
-
-      /* -----------------------------------------------------
-         DATABASE INSERT
-         ----------------------------------------------------- */
-
-      /*
-       * Keep the existing file_url column for compatibility.
-       *
-       * The storage path is stored rather than generating a
-       * permanently public resume URL.
-       */
-
-      const {
-        data: insertedResume,
-        error: databaseError,
-      } = await supabase
-        .from("resumes")
-        .insert({
-          user_id: user.id,
-          file_name: fileName,
-          file_url: fileName,
-          resume_text: resumeText,
-          ats_score: null,
-          ai_feedback: null,
-        })
-        .select()
-        .single();
-
-      if (databaseError) {
-        console.error(
-          "DATABASE INSERT ERROR:",
-          databaseError
-        );
-
-        /* ---------------------------------------------------
-           CLEAN UP STORAGE IF DATABASE INSERT FAILS
-           --------------------------------------------------- */
-
-        await supabase.storage
+        const {
+          error: uploadError,
+        } = await supabase.storage
           .from("resumes")
-          .remove([fileName]);
+          .upload(fileName, file, {
+            contentType: "application/pdf",
+            upsert: false,
+          });
 
-        uploadedFileName = null;
+        if (uploadError) {
+          console.error(
+            "STORAGE UPLOAD ERROR:",
+            uploadError
+          );
 
-        alert(
-          `Resume could not be saved: ${databaseError.message}`
-        );
+          alert(
+            `Resume upload failed: ${uploadError.message}`
+          );
 
-        resetFileInput();
-        return;
-      }
+          resetFileInput();
+          return;
+        }
 
-      /* -----------------------------------------------------
-         UPDATE UI
-         ----------------------------------------------------- */
+        /* -----------------------------------------------------
+           DATABASE INSERT
+           ----------------------------------------------------- */
 
-      setLatestResume({
-        ...insertedResume,
-        resume_text: resumeText,
-      });
+        /*
+         * Keep the existing file_url column for compatibility.
+         *
+         * The storage path is stored rather than generating a
+         * permanently public resume URL.
+         */
 
-      setResumeCount(
-        (previousCount) => previousCount + 1
-      );
+        const {
+          data: insertedResume,
+          error: databaseError,
+        } = await supabase
+          .from("resumes")
+          .insert({
+            user_id: user.id,
+            file_name: fileName,
+            file_url: fileName,
+            resume_text: resumeText,
+            ats_score: null,
+            ai_feedback: null,
+          })
+          .select()
+          .single();
 
-      alert("Resume uploaded successfully!");
+        if (databaseError) {
+          console.error(
+            "DATABASE INSERT ERROR:",
+            databaseError
+          );
 
-      resetFileInput();
-    } catch (error) {
-      console.error(
-        "RESUME UPLOAD PIPELINE ERROR:",
-        error
-      );
+          /* ---------------------------------------------------
+             CLEAN UP STORAGE IF DATABASE INSERT FAILS
+             --------------------------------------------------- */
 
-      /* -----------------------------------------------------
-         CLEAN UP ORPHANED STORAGE FILE
-         ----------------------------------------------------- */
-
-      if (uploadedFileName) {
-        try {
           await supabase.storage
             .from("resumes")
-            .remove([uploadedFileName]);
-        } catch (cleanupError) {
-          console.error(
-            "STORAGE CLEANUP ERROR:",
-            cleanupError
+            .remove([fileName]);
+
+          uploadedFileName = null;
+
+          alert(
+            `Resume could not be saved: ${databaseError.message}`
           );
+
+          resetFileInput();
+          return;
         }
+
+        /* -----------------------------------------------------
+           UPDATE UI
+           ----------------------------------------------------- */
+
+        setLatestResume({
+          ...insertedResume,
+          resume_text: resumeText,
+        });
+
+        setResumeCount(
+          (previousCount) => previousCount + 1
+        );
+
+        alert("Resume uploaded successfully!");
+
+        resetFileInput();
+      } catch (error) {
+        console.error(
+          "RESUME UPLOAD PIPELINE ERROR:",
+          error
+        );
+
+        /* -----------------------------------------------------
+           CLEAN UP ORPHANED STORAGE FILE
+           ----------------------------------------------------- */
+
+        if (uploadedFileName) {
+          try {
+            await supabase.storage
+              .from("resumes")
+              .remove([uploadedFileName]);
+          } catch (cleanupError) {
+            console.error(
+              "STORAGE CLEANUP ERROR:",
+              cleanupError
+            );
+          }
+        }
+
+        alert(
+          `Resume upload failed: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`
+        );
+
+        resetFileInput();
+      } finally {
+        setIsUploading(false);
       }
-
-      alert(
-        `Resume upload failed: ${
-          error instanceof Error
-            ? error.message
-            : String(error)
-        }`
-      );
-
-      resetFileInput();
-    } finally {
-      setIsUploading(false);
-    }
-  };
+    };
 
   /* =========================================================
      TAILORED RESUME PIPELINE
@@ -535,18 +696,64 @@ export default function DashboardContent() {
         );
       }
 
-      setTailoredResume(
-        tailoredText
-      );
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error(
+          authError?.message ||
+            "Please login again before saving your tailored resume."
+        );
+      }
+
+      /*
+       * Save every successful generation in Supabase.
+       * The user_id is taken from the authenticated session,
+       * not from user-entered data.
+       */
+      const { error: saveError } = await supabase
+        .from("tailored_resumes")
+        .insert({
+          user_id: user.id,
+          resume_id: latestResume.id,
+          job_description: jobDescription.trim(),
+          tailored_resume: tailoredText,
+        });
+
+      if (saveError) {
+        console.error(
+          "TAILORED RESUME SAVE ERROR:",
+          saveError
+        );
+
+        throw new Error(
+          `Your resume was generated, but could not be saved: ${saveError.message}`
+        );
+      }
+
+      const nextTailoredCount =
+        usage.tailoredResumes + 1;
+
+      /*
+       * Persist usage only after the tailored resume itself has
+       * been saved successfully.
+       */
+      await persistUsage(user.id, {
+        ...usage,
+        tailoredResumes: nextTailoredCount,
+      });
+
+      setTailoredResume(tailoredText);
 
       setUsage((previousUsage) => ({
         ...previousUsage,
-        tailoredResumes:
-          previousUsage.tailoredResumes + 1,
+        tailoredResumes: nextTailoredCount,
       }));
 
       alert(
-        "Your resume has been tailored successfully!"
+        "Your resume has been tailored and saved successfully!"
       );
     } catch (error) {
       console.error(
@@ -721,10 +928,29 @@ export default function DashboardContent() {
          UPDATE UI USAGE
          ----------------------------------------------------- */
 
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error(
+          authError?.message ||
+            "Please login again before saving usage."
+        );
+      }
+
+      const nextAtsCount =
+        usage.atsScans + 1;
+
+      await persistUsage(user.id, {
+        ...usage,
+        atsScans: nextAtsCount,
+      });
+
       setUsage((previousUsage) => ({
         ...previousUsage,
-        atsScans:
-          previousUsage.atsScans + 1,
+        atsScans: nextAtsCount,
       }));
 
       alert(
@@ -823,6 +1049,7 @@ export default function DashboardContent() {
   };
 
   const handleTrackerWorkspace = () => {
+    
     if (!canUseTracker) {
       alert(
         "You have reached your free application tracker limit."
@@ -1040,10 +1267,29 @@ export default function DashboardContent() {
          One completed search counts as one job-match search.
          ----------------------------------------------------- */
 
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error(
+          authError?.message ||
+            "Please login again before saving usage."
+        );
+      }
+
+      const nextJobMatchCount =
+        usage.jobMatches + 1;
+
+      await persistUsage(user.id, {
+        ...usage,
+        jobMatches: nextJobMatchCount,
+      });
+
       setUsage((previousUsage) => ({
         ...previousUsage,
-        jobMatches:
-          previousUsage.jobMatches + 1,
+        jobMatches: nextJobMatchCount,
       }));
     } catch (error) {
       console.error(
@@ -1158,6 +1404,40 @@ export default function DashboardContent() {
     }
 
     return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+  };
+
+  /* =========================================================
+     WORKIVO BOT UI HANDLERS
+     ========================================================= */
+
+  const handleBotSubmit = () => {
+    const message = botInput.trim();
+
+    if (!message) return;
+
+    setBotMessages((previousMessages) => [
+      ...previousMessages,
+      {
+        role: "user",
+        text: message,
+      },
+      {
+        role: "assistant",
+        text:
+          "I’m connected to the Workivo dashboard UI, but my AI backend isn’t connected yet. Once the bot backend is ready, I’ll be able to answer this properly.",
+      },
+    ]);
+
+    setBotInput("");
+  };
+
+  const handleBotKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleBotSubmit();
+    }
   };
 
   /* =========================================================
@@ -1571,8 +1851,7 @@ export default function DashboardContent() {
                 </p>
               </div>
             </div>
-
-            <div className="mt-8">
+                        <div className="mt-8">
               {atsScore !== null ? (
                 <div>
                   <div className="text-6xl font-bold text-slate-900 dark:text-white">
@@ -1830,6 +2109,17 @@ export default function DashboardContent() {
 
             {tailoredResume ? (
               <div className="mt-6">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Saved to your account
+                  </span>
+
+                  <span className="text-xs text-slate-400">
+                    Persists after refresh
+                  </span>
+                </div>
+
                 <div className="max-h-[600px] overflow-y-auto rounded-xl bg-slate-50 p-5 dark:bg-slate-800/60">
                   <pre className="whitespace-pre-wrap font-sans text-sm leading-7 text-slate-700 dark:text-slate-300">
                     {tailoredResume}
@@ -2003,8 +2293,7 @@ export default function DashboardContent() {
             </button>
           </div>
         )}
-
-        {/* ---------------------------------------------------
+                {/* ---------------------------------------------------
            LOADING STATE
            --------------------------------------------------- */}
 
@@ -2521,8 +2810,7 @@ export default function DashboardContent() {
       </div>
     );
   };
-
-  /* =========================================================
+      /* =========================================================
      INSIGHTS WORKSPACE
      ========================================================= */
 
@@ -2628,7 +2916,7 @@ export default function DashboardContent() {
 
   /* =========================================================
      FINAL RENDER
-     ========================================================= */
+     ========================================================= */ 
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 dark:bg-slate-950 sm:px-6 lg:px-8">
@@ -2739,6 +3027,108 @@ export default function DashboardContent() {
           {renderWorkspace()}
         </div>
       </div>
+
+      {/* =======================================================
+          FLOATING WORKIVO BOT
+
+          Frontend-only shell for now. The AI/backend connection
+          can be wired into handleBotSubmit later.
+          ======================================================= */}
+
+      {isBotOpen && (
+        <div className="fixed bottom-24 right-4 z-50 w-[calc(100vw-2rem)] max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:right-6">
+          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-900">
+                <Bot className="h-5 w-5" />
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Workivo Bot
+                </p>
+
+                <p className="text-xs text-slate-400">
+                  AI assistant
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsBotOpen(false)}
+              className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              aria-label="Close Workivo Bot"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="max-h-80 space-y-3 overflow-y-auto p-4">
+            {botMessages.map(
+              (message, index) => (
+                <div
+                  key={`${message.role}-${index}`}
+                  className={`flex ${
+                    message.role === "user"
+                      ? "justify-end"
+                      : "justify-start"
+                  }`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
+                      message.role === "user"
+                        ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                    }`}
+                  >
+                    {message.text}
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+
+          <div className="border-t border-slate-200 p-3 dark:border-slate-800">
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-1.5 dark:border-slate-700 dark:bg-slate-950">
+              <input
+                type="text"
+                value={botInput}
+                onChange={(event) =>
+                  setBotInput(event.target.value)
+                }
+                onKeyDown={handleBotKeyDown}
+                placeholder="Ask Workivo Bot..."
+                className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
+              />
+
+              <button
+                type="button"
+                onClick={handleBotSubmit}
+                disabled={!botInput.trim()}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() =>
+          setIsBotOpen((previousOpen) => !previousOpen)
+        }
+        className="fixed bottom-6 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-xl transition hover:scale-105 hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 sm:right-6"
+        aria-label="Open Workivo Bot"
+      >
+        {isBotOpen ? (
+          <X className="h-6 w-6" />
+        ) : (
+          <Bot className="h-6 w-6" />
+        )}
+      </button>
     </div>
   );
 }
