@@ -43,7 +43,7 @@ export default function DashboardContent() {
 
   /* =========================================================
      JOB MATCHING STATE
-     
+
      NEW:
      These states are only for the Job Matching feature.
      ========================================================= */
@@ -89,10 +89,14 @@ export default function DashboardContent() {
 
   /* =========================================================
      USAGE STATE
-     
+
      IMPORTANT:
-     These counters remain UI-side for now.
-     They are NOT treated as secure billing enforcement.
+     ATS, tailored resume, and tracker counters are still
+     persisted by their existing frontend flows.
+
+     Job Matching usage is now server-enforced by the
+     Edge Function + database. The frontend only displays
+     and syncs the server-returned Job Matching count.
      ========================================================= */
 
   const [usage, setUsage] = useState({
@@ -104,11 +108,11 @@ export default function DashboardContent() {
 
   /* =========================================================
      STATIC ATS JOB DESCRIPTION
-     
+
      IMPORTANT:
      The actual ATS webhook call is now server-side.
      The frontend never contains the Make webhook URL.
-     
+
      The Edge Function can use this same fixed description
      server-side as well.
      ========================================================= */
@@ -118,7 +122,7 @@ export default function DashboardContent() {
 
   /* =========================================================
      WORKSPACE NAVIGATION
-     
+
      ONE workspace renderer only.
      The duplicate workspace/modal that existed later in the
      original file will be removed in Part 2.
@@ -325,13 +329,19 @@ export default function DashboardContent() {
       );
     } else if (usageResult.data) {
       setUsage({
-        atsScans: Number(usageResult.data.ats_scans) || 0,
+        atsScans:
+          Number(usageResult.data.ats_scans) || 0,
+
         tailoredResumes:
           Number(usageResult.data.tailored_resumes) || 0,
+
         jobMatches:
           Number(usageResult.data.job_matches) || 0,
+
         trackedApplications:
-          Number(usageResult.data.tracked_applications) || 0,
+          Number(
+            usageResult.data.tracked_applications
+          ) || 0,
       });
     } else {
       try {
@@ -394,9 +404,9 @@ export default function DashboardContent() {
 
   /* =========================================================
      RESUME UPLOAD PIPELINE
-     
+
      PDF ONLY.
-     
+
      IMPORTANT:
      There is intentionally NO file-size validation here.
      Do not add one.
@@ -414,7 +424,7 @@ export default function DashboardContent() {
 
     /* -------------------------------------------------------
        PDF VALIDATION
-       
+
        Keep PDF-only behavior.
        No size validation is intentionally performed.
        ------------------------------------------------------- */
@@ -449,180 +459,179 @@ export default function DashboardContent() {
         resetFileInput();
         return;
       }
-          
 
-        /* -----------------------------------------------------
-           GET AUTHENTICATED USER BEFORE STORAGE WORK
-           ----------------------------------------------------- */
+      /* -----------------------------------------------------
+         GET AUTHENTICATED USER BEFORE STORAGE WORK
+         ----------------------------------------------------- */
 
-        const {
-          data: { user },
-          error: authError,
-        } = await supabase.auth.getUser();
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-        if (authError) {
-          console.error(
-            "AUTH ERROR:",
-            authError
-          );
+      if (authError) {
+        console.error(
+          "AUTH ERROR:",
+          authError
+        );
 
-          alert("Unable to verify your account.");
-          resetFileInput();
-          return;
-        }
+        alert("Unable to verify your account.");
+        resetFileInput();
+        return;
+      }
 
-        if (!user) {
-          alert("Please login first.");
-          resetFileInput();
-          return;
-        }
+      if (!user) {
+        alert("Please login first.");
+        resetFileInput();
+        return;
+      }
 
-        /* -----------------------------------------------------
-           USER-SCOPED STORAGE PATH
-           
-           This avoids using a globally exposed/random root-level
-           filename.
-           ----------------------------------------------------- */
+      /* -----------------------------------------------------
+         USER-SCOPED STORAGE PATH
 
-        const safeFileName = file.name
-          .replace(/[^a-zA-Z0-9._-]/g, "_")
-          .replace(/\.pdf$/i, ".pdf");
+         This avoids using a globally exposed/random root-level
+         filename.
+         ----------------------------------------------------- */
 
-        const fileName =
-          `${user.id}/${Date.now()}-${safeFileName}`;
+      const safeFileName = file.name
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .replace(/\.pdf$/i, ".pdf");
 
-        uploadedFileName = fileName;
+      const fileName =
+        `${user.id}/${Date.now()}-${safeFileName}`;
 
-        /* -----------------------------------------------------
-           UPLOAD TO SUPABASE STORAGE
-           ----------------------------------------------------- */
+      uploadedFileName = fileName;
 
-        const {
-          error: uploadError,
-        } = await supabase.storage
-          .from("resumes")
-          .upload(fileName, file, {
-            contentType: "application/pdf",
-            upsert: false,
-          });
+      /* -----------------------------------------------------
+         UPLOAD TO SUPABASE STORAGE
+         ----------------------------------------------------- */
 
-        if (uploadError) {
-          console.error(
-            "STORAGE UPLOAD ERROR:",
-            uploadError
-          );
-
-          alert(
-            `Resume upload failed: ${uploadError.message}`
-          );
-
-          resetFileInput();
-          return;
-        }
-
-        /* -----------------------------------------------------
-           DATABASE INSERT
-           ----------------------------------------------------- */
-
-        /*
-         * Keep the existing file_url column for compatibility.
-         *
-         * The storage path is stored rather than generating a
-         * permanently public resume URL.
-         */
-
-        const {
-          data: insertedResume,
-          error: databaseError,
-        } = await supabase
-          .from("resumes")
-          .insert({
-            user_id: user.id,
-            file_name: fileName,
-            file_url: fileName,
-            resume_text: resumeText,
-            ats_score: null,
-            ai_feedback: null,
-          })
-          .select()
-          .single();
-
-        if (databaseError) {
-          console.error(
-            "DATABASE INSERT ERROR:",
-            databaseError
-          );
-
-          /* ---------------------------------------------------
-             CLEAN UP STORAGE IF DATABASE INSERT FAILS
-             --------------------------------------------------- */
-
-          await supabase.storage
-            .from("resumes")
-            .remove([fileName]);
-
-          uploadedFileName = null;
-
-          alert(
-            `Resume could not be saved: ${databaseError.message}`
-          );
-
-          resetFileInput();
-          return;
-        }
-
-        /* -----------------------------------------------------
-           UPDATE UI
-           ----------------------------------------------------- */
-
-        setLatestResume({
-          ...insertedResume,
-          resume_text: resumeText,
+      const {
+        error: uploadError,
+      } = await supabase.storage
+        .from("resumes")
+        .upload(fileName, file, {
+          contentType: "application/pdf",
+          upsert: false,
         });
 
-        setResumeCount(
-          (previousCount) => previousCount + 1
-        );
-
-        alert("Resume uploaded successfully!");
-
-        resetFileInput();
-      } catch (error) {
+      if (uploadError) {
         console.error(
-          "RESUME UPLOAD PIPELINE ERROR:",
-          error
+          "STORAGE UPLOAD ERROR:",
+          uploadError
         );
-
-        /* -----------------------------------------------------
-           CLEAN UP ORPHANED STORAGE FILE
-           ----------------------------------------------------- */
-
-        if (uploadedFileName) {
-          try {
-            await supabase.storage
-              .from("resumes")
-              .remove([uploadedFileName]);
-          } catch (cleanupError) {
-            console.error(
-              "STORAGE CLEANUP ERROR:",
-              cleanupError
-            );
-          }
-        }
 
         alert(
-          `Resume upload failed: ${
-            error instanceof Error
-              ? error.message
-              : String(error)
-          }`
+          `Resume upload failed: ${uploadError.message}`
         );
 
         resetFileInput();
-      } finally {
-        setIsUploading(false);
+        return;
       }
-    };
+
+      /* -----------------------------------------------------
+         DATABASE INSERT
+         ----------------------------------------------------- */
+
+      /*
+       * Keep the existing file_url column for compatibility.
+       *
+       * The storage path is stored rather than generating a
+       * permanently public resume URL.
+       */
+
+      const {
+        data: insertedResume,
+        error: databaseError,
+      } = await supabase
+        .from("resumes")
+        .insert({
+          user_id: user.id,
+          file_name: fileName,
+          file_url: fileName,
+          resume_text: resumeText,
+          ats_score: null,
+          ai_feedback: null,
+        })
+        .select()
+        .single();
+
+      if (databaseError) {
+        console.error(
+          "DATABASE INSERT ERROR:",
+          databaseError
+        );
+
+        /* ---------------------------------------------------
+           CLEAN UP STORAGE IF DATABASE INSERT FAILS
+           --------------------------------------------------- */
+
+        await supabase.storage
+          .from("resumes")
+          .remove([fileName]);
+
+        uploadedFileName = null;
+
+        alert(
+          `Resume could not be saved: ${databaseError.message}`
+        );
+
+        resetFileInput();
+        return;
+      }
+
+      /* -----------------------------------------------------
+         UPDATE UI
+         ----------------------------------------------------- */
+
+      setLatestResume({
+        ...insertedResume,
+        resume_text: resumeText,
+      });
+
+      setResumeCount(
+        (previousCount) => previousCount + 1
+      );
+
+      alert("Resume uploaded successfully!");
+
+      resetFileInput();
+    } catch (error) {
+      console.error(
+        "RESUME UPLOAD PIPELINE ERROR:",
+        error
+      );
+
+      /* -----------------------------------------------------
+         CLEAN UP ORPHANED STORAGE FILE
+         ----------------------------------------------------- */
+
+      if (uploadedFileName) {
+        try {
+          await supabase.storage
+            .from("resumes")
+            .remove([uploadedFileName]);
+        } catch (cleanupError) {
+          console.error(
+            "STORAGE CLEANUP ERROR:",
+            cleanupError
+          );
+        }
+      }
+
+      alert(
+        `Resume upload failed: ${
+          error instanceof Error
+            ? error.message
+            : String(error)
+        }`
+      );
+
+      resetFileInput();
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   /* =========================================================
      TAILORED RESUME PIPELINE
@@ -773,20 +782,20 @@ export default function DashboardContent() {
 
   /* =========================================================
      ATS SCAN PIPELINE
-     
+
      IMPORTANT SECURITY CHANGE:
-     
+
      ❌ NO MAKE WEBHOOK URL IN FRONTEND
-     
+
      The frontend now calls a Supabase Edge Function.
-     
+
      The Edge Function is responsible for:
        1. Verifying the user
        2. Using the fixed ATS job description
        3. Calling Make securely
        4. Validating the Make response
        5. Returning the ATS result
-     
+
      The Make webhook URL therefore never reaches the browser.
      ========================================================= */
 
@@ -810,10 +819,10 @@ export default function DashboardContent() {
     try {
       /* -----------------------------------------------------
          SECURE SERVER-SIDE ATS REQUEST
-         
+
          Edge Function name:
          ats-scan
-         
+
          IMPORTANT:
          Do NOT put the Make URL here.
          ----------------------------------------------------- */
@@ -1049,7 +1058,6 @@ export default function DashboardContent() {
   };
 
   const handleTrackerWorkspace = () => {
-    
     if (!canUseTracker) {
       alert(
         "You have reached your free application tracker limit."
@@ -1062,11 +1070,11 @@ export default function DashboardContent() {
 
   /* =========================================================
      JOB MATCHING
-     
+
      NEW FEATURE
-     
+
      Flow:
-     
+
      Dashboard
         ↓
      Supabase Edge Function
@@ -1114,13 +1122,13 @@ export default function DashboardContent() {
     try {
       /* -----------------------------------------------------
          SECURE JOB MATCHING REQUEST
-         
+
          IMPORTANT:
          The Make webhook URL is NOT in the frontend.
-         
+
          Supabase Edge Function:
          job-matching
-         
+
          Only the resume text is sent.
          Make itself fetches the available jobs.
          ----------------------------------------------------- */
@@ -1165,7 +1173,7 @@ export default function DashboardContent() {
 
       /* -----------------------------------------------------
          NORMALIZE + SORT JOBS
-         
+
          The Edge Function already normalizes the old
          trailing-space keys, but this extra defensive layer
          prevents the UI from breaking if an older response
@@ -1262,34 +1270,41 @@ export default function DashboardContent() {
       setMatchingJobs(normalizedJobs);
 
       /* -----------------------------------------------------
-         UPDATE UI USAGE
-         
-         One completed search counts as one job-match search.
+         SYNC USAGE FROM THE EDGE FUNCTION
+
+         IMPORTANT:
+         The Job Matching Edge Function + database are now
+         the source of truth for Job Matching usage.
+
+         Do NOT increment jobMatches locally and do NOT call
+         persistUsage() here.
+
+         The Edge Function has already reserved the usage
+         before Make was called.
+
+         On success, the Edge Function returns:
+
+         data.usage.job_matches
          ----------------------------------------------------- */
 
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
+      const serverJobMatchCount =
+        Number(data?.usage?.job_matches);
 
-      if (authError || !user) {
+      if (
+        !Number.isFinite(serverJobMatchCount) ||
+        serverJobMatchCount < 0
+      ) {
         throw new Error(
-          authError?.message ||
-            "Please login again before saving usage."
+          "Job matching response did not contain valid usage information."
         );
       }
 
-      const nextJobMatchCount =
-        usage.jobMatches + 1;
-
-      await persistUsage(user.id, {
-        ...usage,
-        jobMatches: nextJobMatchCount,
-      });
-
       setUsage((previousUsage) => ({
         ...previousUsage,
-        jobMatches: nextJobMatchCount,
+        jobMatches: Math.min(
+          FREE_LIMITS.jobMatches,
+          serverJobMatchCount
+        ),
       }));
     } catch (error) {
       console.error(
@@ -1309,7 +1324,7 @@ export default function DashboardContent() {
 
   /* =========================================================
      JOB MATCHING DISPLAY HELPERS
-     
+
      NEW:
      These helpers are only used by the Job Matching workspace.
      ========================================================= */
@@ -1851,6 +1866,1110 @@ export default function DashboardContent() {
                 </p>
               </div>
             </div>
+
+            <div className="mt-8">
+              {atsScore !== null ? (
+                <div>
+                  <div className="text-6xl font-bold text-slate-900 dark:text-white">
+                    {atsScore}
+                    <span className="text-2xl text-slate-400">
+                      /100
+                    </span>
+                  </div>
+
+                  <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                    <div
+                      className="h-full rounded-full bg-blue-600 transition-all"
+                      style={{
+                        width: `${atsScore}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {atsFeedback ||
+                        "No additional feedback provided."}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
+                  <ScanSearch className="mx-auto h-8 w-8 text-slate-400" />
+
+                  <p className="mt-3 font-medium text-slate-700 dark:text-slate-300">
+                    No ATS result yet
+                  </p>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Run your first scan to see your score.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleScanResume}
+              disabled={
+                !latestResume ||
+                isScanning ||
+                !canUseATS
+              }
+              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isScanning ? (
+                <>
+                  <Activity className="h-4 w-4 animate-pulse" />
+                  Scanning Resume...
+                </>
+              ) : (
+                <>
+                  <ScanSearch className="h-4 w-4" />
+                  Run ATS Scan
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <Bot className="h-5 w-5 text-purple-500" />
+
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  AI Analysis
+                </h3>
+              </div>
+
+              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Your resume is sent through the secure
+                server-side ATS pipeline. The Make webhook
+                URL is not exposed in the browser.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <LockKeyhole className="h-5 w-5 text-emerald-500" />
+
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Secure Pipeline
+                </h3>
+              </div>
+
+              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Browser → Supabase Edge Function → Make →
+                ATS result.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <Zap className="h-5 w-5 text-amber-500" />
+
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Free Usage
+                </h3>
+              </div>
+
+              <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+                {usage.atsScans} of{" "}
+                {FREE_LIMITS.atsScans} ATS scans used.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     TAILORED RESUME WORKSPACE
+     ========================================================= */
+
+  const renderTailoredWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              AI Resume Writer
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Tailor your resume to a specific job description.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+                <WandSparkles className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Tailor Your Resume
+                </h3>
+
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Add the job description below.
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-6 block">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                Job Description
+              </span>
+
+              <textarea
+                value={jobDescription}
+                onChange={(event) =>
+                  setJobDescription(event.target.value)
+                }
+                placeholder="Paste the job description here..."
+                className="mt-2 min-h-[220px] w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={handleTailorResume}
+              disabled={
+                !latestResume ||
+                !jobDescription.trim() ||
+                isTailoring ||
+                !canUseTailoredResume
+              }
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isTailoring ? (
+                <>
+                  <Activity className="h-4 w-4 animate-pulse" />
+                  Tailoring Resume...
+                </>
+              ) : (
+                <>
+                  <WandSparkles className="h-4 w-4" />
+                  Tailor Resume
+                </>
+              )}
+            </button>
+
+            <p className="mt-3 text-center text-xs text-slate-400">
+              {usage.tailoredResumes}/
+              {FREE_LIMITS.tailoredResumes} free generations used
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
+                  Generated Resume
+                </p>
+
+                <h3 className="mt-1 text-xl font-bold text-slate-900 dark:text-white">
+                  Your Tailored Version
+                </h3>
+              </div>
+
+              {tailoredResume && (
+                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+              )}
+            </div>
+
+            <div className="mt-6 min-h-[420px] rounded-xl bg-slate-50 p-5 dark:bg-slate-800/50">
+              {tailoredResume ? (
+                <pre className="whitespace-pre-wrap font-sans text-sm leading-7 text-slate-700 dark:text-slate-300">
+                  {tailoredResume}
+                </pre>
+              ) : (
+                <div className="flex min-h-[380px] items-center justify-center text-center">
+                  <div>
+                    <WandSparkles className="mx-auto h-8 w-8 text-slate-400" />
+
+                    <p className="mt-3 font-medium text-slate-700 dark:text-slate-300">
+                      No tailored resume yet
+                    </p>
+
+                    <p className="mt-1 max-w-sm text-sm leading-6 text-slate-500">
+                      Add a job description and generate your
+                      personalized resume.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+      setUsage((previousUsage) => ({
+        ...previousUsage,
+        tailoredResumes: nextTailoredCount,
+      }));
+
+      alert(
+        "Your resume has been tailored and saved successfully!"
+      );
+    } catch (error) {
+      console.error(
+        "TAILOR RESUME ERROR:",
+        error
+      );
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "AI resume tailoring failed."
+      );
+    } finally {
+      setIsTailoring(false);
+    }
+  };
+
+  /* =========================================================
+     ATS SCAN PIPELINE
+     
+     IMPORTANT SECURITY CHANGE:
+     
+     ❌ NO MAKE WEBHOOK URL IN FRONTEND
+     
+     The frontend now calls a Supabase Edge Function.
+     
+     The Edge Function is responsible for:
+       1. Verifying the user
+       2. Using the fixed ATS job description
+       3. Calling Make securely
+       4. Validating the Make response
+       5. Returning the ATS result
+     
+     The Make webhook URL therefore never reaches the browser.
+     ========================================================= */
+
+  const handleScanResume = async () => {
+    if (!latestResume) {
+      alert("Please upload a resume first.");
+      return;
+    }
+
+    if (!canUseATS) {
+      alert(
+        "You have reached your free ATS scan limit."
+      );
+      return;
+    }
+
+    if (isScanning) return;
+
+    setIsScanning(true);
+
+    try {
+      /* -----------------------------------------------------
+         SECURE SERVER-SIDE ATS REQUEST
+         
+         Edge Function name:
+         ats-scan
+         
+         IMPORTANT:
+         Do NOT put the Make URL here.
+         ----------------------------------------------------- */
+
+      const {
+        data,
+        error,
+      } = await supabase.functions.invoke(
+        "ats-scan",
+        {
+          body: {
+            resume_text:
+              latestResume.resume_text || "",
+
+            /*
+             * Kept here as a fixed value for compatibility.
+             * The server should ultimately own the canonical
+             * value as well.
+             */
+            job_description:
+              STATIC_ATS_JOB_DESCRIPTION,
+          },
+        }
+      );
+
+      if (error) {
+        console.error(
+          "ATS FUNCTION ERROR:",
+          error
+        );
+
+        throw new Error(
+          error.message ||
+            "ATS scan request failed."
+        );
+      }
+
+      /* -----------------------------------------------------
+         RESPONSE VALIDATION
+         ----------------------------------------------------- */
+
+      if (!data || typeof data !== "object") {
+        throw new Error(
+          "Invalid ATS response."
+        );
+      }
+
+      const rawScore =
+        Number(data.ats_score);
+
+      if (
+        !Number.isFinite(rawScore)
+      ) {
+        throw new Error(
+          "ATS response did not contain a valid score."
+        );
+      }
+
+      const atsScore = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(rawScore)
+        )
+      );
+
+      const feedback =
+        typeof data.feedback === "string"
+          ? data.feedback
+          : "";
+
+      /* -----------------------------------------------------
+         DATABASE UPDATE
+         ----------------------------------------------------- */
+
+      const {
+        data: updatedResume,
+        error: updateError,
+      } = await supabase
+        .from("resumes")
+        .update({
+          ats_score: atsScore,
+          ai_feedback: feedback,
+        })
+        .eq("id", latestResume.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error(
+          "ATS DATABASE UPDATE ERROR:",
+          updateError
+        );
+
+        throw new Error(
+          "The ATS scan completed, but the result could not be saved."
+        );
+      }
+
+      /* -----------------------------------------------------
+         UPDATE LOCAL RESUME STATE
+         ----------------------------------------------------- */
+
+      setLatestResume({
+        ...latestResume,
+        ...updatedResume,
+        ats_score: atsScore,
+        ai_feedback: feedback,
+      });
+
+      /* -----------------------------------------------------
+         UPDATE UI USAGE
+         ----------------------------------------------------- */
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error(
+          authError?.message ||
+            "Please login again before saving usage."
+        );
+      }
+
+      const nextAtsCount =
+        usage.atsScans + 1;
+
+      await persistUsage(user.id, {
+        ...usage,
+        atsScans: nextAtsCount,
+      });
+
+      setUsage((previousUsage) => ({
+        ...previousUsage,
+        atsScans: nextAtsCount,
+      }));
+
+      alert(
+        `ATS Score: ${atsScore}%\n\n${
+          feedback || "No additional feedback provided."
+        }`
+      );
+    } catch (error) {
+      console.error(
+        "ATS SCAN ERROR:",
+        error
+      );
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "AI scan failed."
+      );
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  /* =========================================================
+     USAGE HELPERS
+     ========================================================= */
+
+  const canUseATS =
+    usage.atsScans < FREE_LIMITS.atsScans;
+
+  const canUseTailoredResume =
+    usage.tailoredResumes <
+    FREE_LIMITS.tailoredResumes;
+
+  const canUseJobMatches =
+    usage.jobMatches <
+    FREE_LIMITS.jobMatches;
+
+  const canUseTracker =
+    usage.trackedApplications <
+    FREE_LIMITS.trackedApplications;
+
+  /* =========================================================
+     ATS SCORE DISPLAY
+     ========================================================= */
+
+  const atsScore =
+    latestResume?.ats_score !== null &&
+    latestResume?.ats_score !== undefined
+      ? Number(latestResume.ats_score)
+      : null;
+
+  const atsFeedback =
+    typeof latestResume?.ai_feedback === "string"
+      ? latestResume.ai_feedback
+      : "";
+
+  /* =========================================================
+     WORKSPACE ACTIONS
+     ========================================================= */
+
+  const handleATSWorkspace = () => {
+    if (!latestResume) {
+      alert("Please upload a resume first.");
+      return;
+    }
+
+    openWorkspace("ats");
+  };
+
+  const handleTailoredWorkspace = () => {
+    if (!canUseTailoredResume) {
+      alert(
+        "You have reached your free tailored resume limit."
+      );
+      return;
+    }
+
+    if (!latestResume) {
+      alert("Please upload a resume first.");
+      return;
+    }
+
+    openWorkspace("tailored");
+  };
+
+  const handleMatchingWorkspace = () => {
+    if (!canUseJobMatches) {
+      alert(
+        "You have reached your free job matching limit."
+      );
+      return;
+    }
+
+    openWorkspace("matching");
+  };
+
+  const handleTrackerWorkspace = () => {
+    
+    if (!canUseTracker) {
+      alert(
+        "You have reached your free application tracker limit."
+      );
+      return;
+    }
+
+    openWorkspace("tracker");
+  };
+
+  /* =========================================================
+     JOB MATCHING
+     
+     NEW FEATURE
+     
+     Flow:
+     
+     Dashboard
+        ↓
+     Supabase Edge Function
+        ↓
+     Make Job Matching Webhook
+        ↓
+     Himalayas jobs
+        ↓
+     MiniMax ranking
+        ↓
+     Edge Function normalization
+        ↓
+     Dashboard job cards
+     ========================================================= */
+
+  const handleFindMatchingJobs = async () => {
+    if (!latestResume) {
+      alert("Please upload a resume first.");
+      return;
+    }
+
+    if (!canUseJobMatches) {
+      alert(
+        "You have reached your free job matching limit."
+      );
+      return;
+    }
+
+    if (isMatching) return;
+
+    const resumeText =
+      typeof latestResume.resume_text === "string"
+        ? latestResume.resume_text.trim()
+        : "";
+
+    if (!resumeText) {
+      alert(
+        "Your resume does not contain readable text. Please upload your resume again."
+      );
+      return;
+    }
+
+    setIsMatching(true);
+
+    try {
+      /* -----------------------------------------------------
+         SECURE JOB MATCHING REQUEST
+         
+         IMPORTANT:
+         The Make webhook URL is NOT in the frontend.
+         
+         Supabase Edge Function:
+         job-matching
+         
+         Only the resume text is sent.
+         Make itself fetches the available jobs.
+         ----------------------------------------------------- */
+
+      const {
+        data,
+        error,
+      } = await supabase.functions.invoke(
+        "job-matching",
+        {
+          body: {
+            resume_text: resumeText,
+          },
+        }
+      );
+
+      if (error) {
+        console.error(
+          "JOB MATCHING FUNCTION ERROR:",
+          error
+        );
+
+        throw new Error(
+          error.message ||
+            "Job matching request failed."
+        );
+      }
+
+      /* -----------------------------------------------------
+         RESPONSE VALIDATION
+         ----------------------------------------------------- */
+
+      if (
+        !data ||
+        typeof data !== "object" ||
+        !Array.isArray(data.jobs)
+      ) {
+        throw new Error(
+          "Invalid job matching response."
+        );
+      }
+
+      /* -----------------------------------------------------
+         NORMALIZE + SORT JOBS
+         
+         The Edge Function already normalizes the old
+         trailing-space keys, but this extra defensive layer
+         prevents the UI from breaking if an older response
+         ever reaches the frontend.
+         ----------------------------------------------------- */
+
+      const normalizedJobs = data.jobs
+        .filter(
+          (job: any) =>
+            job &&
+            typeof job === "object"
+        )
+        .map((job: any) => ({
+          ...job,
+
+          job_id:
+            job.job_id ?? null,
+
+          title:
+            job.title ?? "",
+
+          companyName:
+            job.companyName ?? "",
+
+          excerpt:
+            job.excerpt !== undefined
+              ? job.excerpt
+              : job["excerpt "] ?? "",
+
+          employmentType:
+            job.employmentType ?? "",
+
+          seniority:
+            job.seniority !== undefined
+              ? job.seniority
+              : job["seniority "] ?? "",
+
+          categories:
+            job.categories !== undefined
+              ? job.categories
+              : job["categories "] ?? "",
+
+          salaryPeriod:
+            job.salaryPeriod ?? "",
+
+          minSalary:
+            job.minSalary ?? null,
+
+          maxSalary:
+            job.maxSalary !== undefined
+              ? job.maxSalary
+              : job["maxSalary "] ?? null,
+
+          applicationLink:
+            job.applicationLink ?? "",
+
+          timezoneRestriction:
+            job.timezoneRestriction ?? "",
+
+          match_score:
+            Number(job.match_score) || 0,
+
+          match_level:
+            job.match_level ?? "",
+
+          reason:
+            job.reason ?? "",
+
+          matching_skills:
+            Array.isArray(job.matching_skills)
+              ? job.matching_skills.filter(Boolean)
+              : [],
+
+          missing_skills:
+            Array.isArray(job.missing_skills)
+              ? job.missing_skills.filter(Boolean)
+              : [],
+        }))
+        .sort(
+          (a: any, b: any) =>
+            b.match_score - a.match_score
+        );
+
+      if (normalizedJobs.length === 0) {
+        throw new Error(
+          "No matching jobs were returned. Please try again later."
+        );
+      }
+
+      /* -----------------------------------------------------
+         UPDATE JOB RESULTS
+         ----------------------------------------------------- */
+
+      setMatchingJobs(normalizedJobs);
+
+      /* -----------------------------------------------------
+         SYNC USAGE FROM THE EDGE FUNCTION
+         
+         IMPORTANT:
+         The Job Matching Edge Function + database are now the
+         source of truth for Job Matching usage.
+         
+         Do NOT increment jobMatches locally and do NOT call
+         persistUsage() here. The Edge Function has already
+         reserved the usage before Make was called.
+         
+         On success, the Edge Function returns:
+         data.usage.job_matches
+         ----------------------------------------------------- */
+
+      const serverJobMatchCount =
+        Number(data?.usage?.job_matches);
+
+      if (
+        !Number.isFinite(serverJobMatchCount) ||
+        serverJobMatchCount < 0
+      ) {
+        throw new Error(
+          "Job matching response did not contain valid usage information."
+        );
+      }
+
+      setUsage((previousUsage) => ({
+        ...previousUsage,
+        jobMatches: Math.min(
+          FREE_LIMITS.jobMatches,
+          serverJobMatchCount
+        ),
+      }));
+    } catch (error) {
+      console.error(
+        "JOB MATCHING ERROR:",
+        error
+      );
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Job matching failed."
+      );
+    } finally {
+      setIsMatching(false);
+    }
+  };
+
+  /* =========================================================
+     JOB MATCHING DISPLAY HELPERS
+     
+     NEW:
+     These helpers are only used by the Job Matching workspace.
+     ========================================================= */
+
+  const formatSalary = (
+    minSalary: any,
+    maxSalary: any,
+    salaryPeriod: any
+  ) => {
+    const min =
+      Number.isFinite(Number(minSalary))
+        ? Number(minSalary)
+        : null;
+
+    const max =
+      Number.isFinite(Number(maxSalary))
+        ? Number(maxSalary)
+        : null;
+
+    if (min === null && max === null) {
+      return "";
+    }
+
+    let salaryText = "";
+
+    if (min !== null && max !== null) {
+      salaryText =
+        min === max
+          ? `${min.toLocaleString()}`
+          : `${min.toLocaleString()} – ${max.toLocaleString()}`;
+    } else if (min !== null) {
+      salaryText = `From ${min.toLocaleString()}`;
+    } else if (max !== null) {
+      salaryText = `Up to ${max.toLocaleString()}`;
+    }
+
+    if (
+      typeof salaryPeriod === "string" &&
+      salaryPeriod.trim()
+    ) {
+      return `${salaryText} / ${salaryPeriod}`;
+    }
+
+    return salaryText;
+  };
+
+  const formatCategories = (
+    categories: any
+  ) => {
+    if (Array.isArray(categories)) {
+      return categories
+        .filter(Boolean)
+        .join(" • ");
+    }
+
+    if (
+      typeof categories === "string"
+    ) {
+      return categories.trim();
+    }
+
+    return "";
+  };
+
+  const getMatchLevelClass = (
+    matchLevel: string
+  ) => {
+    const normalized =
+      matchLevel
+        .toLowerCase()
+        .trim();
+
+    if (
+      normalized.includes("excellent") ||
+      normalized.includes("strong")
+    ) {
+      return "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400";
+    }
+
+    if (
+      normalized.includes("good") ||
+      normalized.includes("high")
+    ) {
+      return "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400";
+    }
+
+    if (
+      normalized.includes("fair") ||
+      normalized.includes("moderate")
+    ) {
+      return "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400";
+    }
+
+    return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+  };
+
+  /* =========================================================
+     WORKIVO BOT UI HANDLERS
+     ========================================================= */
+
+  const handleBotSubmit = () => {
+    const message = botInput.trim();
+
+    if (!message) return;
+
+    setBotMessages((previousMessages) => [
+      ...previousMessages,
+      {
+        role: "user",
+        text: message,
+      },
+      {
+        role: "assistant",
+        text:
+          "I’m connected to the Workivo dashboard UI, but my AI backend isn’t connected yet. Once the bot backend is ready, I’ll be able to answer this properly.",
+      },
+    ]);
+
+    setBotInput("");
+  };
+
+  const handleBotKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleBotSubmit();
+    }
+  };
+
+  /* =========================================================
+     OVERVIEW CARD
+     ========================================================= */
+
+  const renderOverview = () => {
+    return (
+      <div className="space-y-6">
+        {/* ---------------------------------------------------
+           HEADER
+           --------------------------------------------------- */}
+
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              AI Resume Dashboard
+            </h1>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Upload your resume, improve your ATS score,
+              and manage your job applications.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleUploadClick}
+            disabled={isUploading}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
+          >
+            <UploadCloud className="h-4 w-4" />
+
+            {isUploading
+              ? "Uploading..."
+              : "Upload Resume"}
+          </button>
+        </div>
+
+        {/* ---------------------------------------------------
+           HIDDEN FILE INPUT
+           --------------------------------------------------- */}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          onChange={handleFileUpload}
+          className="hidden"
+        />
+
+        {/* ---------------------------------------------------
+           RESUME STATUS
+           --------------------------------------------------- */}
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <FileText className="h-6 w-6" />
+              </div>
+
+              <div>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Latest Resume
+                </p>
+
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  {latestResume
+                    ? latestResume.file_name?.split("/").pop() ||
+                      "Resume uploaded"
+                    : "No resume uploaded yet"}
+                </p>
+              </div>
+            </div>
+
+            {latestResume && (
+              <div className="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Resume ready
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ---------------------------------------------------
+           FEATURE CARDS
+           --------------------------------------------------- */}
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {/* ATS */}
+          <button
+            type="button"
+            onClick={handleATSWorkspace}
+            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-blue-500/30"
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <ScanSearch className="h-5 w-5" />
+              </div>
+
+              <ArrowUpRight className="h-4 w-4 text-slate-400 transition group-hover:text-blue-500" />
+            </div>
+
+  /* =========================================================
+     ATS WORKSPACE
+     ========================================================= */
+
+  const renderATSWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              ATS Scanner
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Analyze your resume against ATS requirements.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <ScanSearch className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Resume ATS Analysis
+                </h3>
+
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Fixed job profile analysis
+                </p>
+              </div>
+            </div>
                         <div className="mt-8">
               {atsScore !== null ? (
                 <div>
@@ -2293,7 +3412,8 @@ export default function DashboardContent() {
             </button>
           </div>
         )}
-                {/* ---------------------------------------------------
+
+        {/* ---------------------------------------------------
            LOADING STATE
            --------------------------------------------------- */}
 
@@ -2493,7 +3613,6 @@ export default function DashboardContent() {
                       }
                       className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
                     >
-                      {/* TOP */}
                       <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
@@ -2693,7 +3812,7 @@ export default function DashboardContent() {
                             <ArrowUpRight className="h-4 w-4" />
                           </a>
                         ) : (
-                          <span className="inline-flex shrink-0 items-center justify-center rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-400 dark:bg-slate-800">
+                          <span className="inline-flex shrink-0 items-center justify-center rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                             Application link unavailable
                           </span>
                         )}
@@ -2704,46 +3823,12 @@ export default function DashboardContent() {
               )}
             </div>
           )}
-
-        {/* ---------------------------------------------------
-           SEARCH AGAIN
-           --------------------------------------------------- */}
-
-        {!isMatching &&
-          matchingJobs.length > 0 && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="font-semibold text-slate-900 dark:text-white">
-                    Want another set of opportunities?
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    Run another matching search to refresh your results.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleFindMatchingJobs}
-                  disabled={
-                    isMatching ||
-                    !canUseJobMatches
-                  }
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-500/15"
-                >
-                  <Zap className="h-4 w-4" />
-                  Find New Matches
-                </button>
-              </div>
-            </div>
-          )}
       </div>
     );
   };
 
   /* =========================================================
-     APPLICATION TRACKER WORKSPACE
+     TRACKER WORKSPACE
      ========================================================= */
 
   const renderTrackerWorkspace = () => {
@@ -2760,7 +3845,7 @@ export default function DashboardContent() {
             </h2>
 
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Organize and track your job applications.
+              Keep track of your job applications in one place.
             </p>
           </div>
 
@@ -2773,111 +3858,80 @@ export default function DashboardContent() {
           </button>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="mx-auto max-w-2xl text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
-              <ClipboardList className="h-7 w-7" />
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-2">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
+                <ClipboardList className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Your Applications
+                </h3>
+
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Track the jobs you have applied for.
+                </p>
+              </div>
             </div>
 
-            <h3 className="mt-5 text-xl font-bold text-slate-900 dark:text-white">
-              Track every application
-            </h3>
+            <div className="mt-8 rounded-xl border border-dashed border-slate-300 p-10 text-center dark:border-slate-700">
+              <ClipboardList className="mx-auto h-9 w-9 text-slate-400" />
 
-            <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-              Keep applications, interviews, offers, and
-              follow-ups organized.
-            </p>
+              <h3 className="mt-4 font-semibold text-slate-900 dark:text-white">
+                No applications tracked yet
+              </h3>
 
-            <button
-              type="button"
-              onClick={() =>
-                alert(
-                  "Application tracker pipeline coming next."
-                )
-              }
-              className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-orange-700"
-            >
-              <ClipboardList className="h-4 w-4" />
-              Add Application
-            </button>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Your application tracker is ready for the next stage of
+                your job search.
+              </p>
 
-            <p className="mt-3 text-xs text-slate-400">
-              {usage.trackedApplications}/
-              {FREE_LIMITS.trackedApplications} tracked
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  };
-      /* =========================================================
-     INSIGHTS WORKSPACE
-     ========================================================= */
-
-  const renderInsightsWorkspace = () => {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
-              AI Resume Co-pilot
-            </p>
-
-            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
-              Insights
-            </h2>
-
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Understand your resume performance.
-            </p>
+              <button
+                type="button"
+                disabled
+                className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 py-3 text-sm font-semibold text-white opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+                Add Application
+              </button>
+            </div>
           </div>
 
-          <button
-            type="button"
-            onClick={closeWorkspace}
-            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <BarChart3 className="h-5 w-5 text-orange-500" />
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <BarChart3 className="h-6 w-6 text-blue-500" />
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Applications
+                </h3>
+              </div>
 
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              Resume uploads
-            </p>
+              <p className="mt-3 text-3xl font-bold text-slate-900 dark:text-white">
+                {usage.trackedApplications}
+              </p>
 
-            <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">
-              {resumeCount}
-            </p>
-          </div>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                Applications currently tracked.
+              </p>
+            </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <TrendingUp className="h-6 w-6 text-emerald-500" />
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-3">
+                <Target className="h-5 w-5 text-blue-500" />
 
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              Latest ATS score
-            </p>
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Stay Organized
+                </h3>
+              </div>
 
-            <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">
-              {atsScore !== null
-                ? `${atsScore}%`
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <Activity className="h-6 w-6 text-purple-500" />
-
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              ATS scans used
-            </p>
-
-            <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">
-              {usage.atsScans}
-            </p>
+              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                Keep your applications, interview stages, and job-search
+                progress organized as you apply.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -2885,10 +3939,116 @@ export default function DashboardContent() {
   };
 
   /* =========================================================
-     WORKSPACE RENDERER
-     
-     IMPORTANT:
-     This is the ONE workspace renderer.
+     BOT WORKSPACE
+     ========================================================= */
+
+  const renderBotWorkspace = () => {
+    return (
+      <div className="flex min-h-[650px] flex-col rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-5 dark:border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">
+              <Bot className="h-5 w-5" />
+            </div>
+
+            <div>
+              <h2 className="font-bold text-slate-900 dark:text-white">
+                Workivo AI Assistant
+              </h2>
+
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Your resume co-pilot
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto p-6">
+          {botMessages.length === 0 ? (
+            <div className="flex min-h-[420px] items-center justify-center text-center">
+              <div className="max-w-md">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">
+                  <Bot className="h-7 w-7" />
+                </div>
+
+                <h3 className="mt-5 text-xl font-bold text-slate-900 dark:text-white">
+                  How can I help?
+                </h3>
+
+                <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  Ask Workivo about your resume, ATS score, job search,
+                  or application strategy.
+                </p>
+              </div>
+            </div>
+          ) : (
+            botMessages.map(
+              (
+                message: {
+                  role: "user" | "assistant";
+                  text: string;
+                },
+                index: number
+              ) => (
+                <div
+                  key={index}
+                  className={`flex ${
+                    message.role === "user"
+                      ? "justify-end"
+                      : "justify-start"
+                  }`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
+                      message.role === "user"
+                        ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                        : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                    }`}
+                  >
+                    {message.text}
+                  </div>
+                </div>
+              )
+            )
+          )}
+        </div>
+
+        <div className="border-t border-slate-200 p-4 dark:border-slate-800">
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-950">
+            <input
+              value={botInput}
+              onChange={(event) =>
+                setBotInput(event.target.value)
+              }
+              onKeyDown={handleBotKeyDown}
+              placeholder="Ask Workivo anything..."
+              className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
+            />
+
+            <button
+              type="button"
+              onClick={handleBotSubmit}
+              disabled={!botInput.trim()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* =========================================================
+     WORKSPACE ROUTER
      ========================================================= */
 
   const renderWorkspace = () => {
@@ -2905,230 +4065,295 @@ export default function DashboardContent() {
       case "tracker":
         return renderTrackerWorkspace();
 
-      case "insights":
-        return renderInsightsWorkspace();
+      case "bot":
+        return renderBotWorkspace();
 
-      case "overview":
       default:
         return renderOverview();
     }
   };
 
   /* =========================================================
-     FINAL RENDER
-     ========================================================= */ 
+     SIDEBAR
+     ========================================================= */
+
+  const sidebarItems = [
+    {
+      id: "overview",
+      label: "Overview",
+      icon: LayoutDashboard,
+    },
+    {
+      id: "ats",
+      label: "ATS Scanner",
+      icon: ScanSearch,
+    },
+    {
+      id: "tailored",
+      label: "AI Resume Writer",
+      icon: WandSparkles,
+    },
+    {
+      id: "matching",
+      label: "Job Matching",
+      icon: BriefcaseBusiness,
+    },
+    {
+      id: "tracker",
+      label: "Application Tracker",
+      icon: ClipboardList,
+    },
+  ] as const;
+
+  /* =========================================================
+     MAIN DASHBOARD RENDER
+     ========================================================= */
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 dark:bg-slate-950 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl">
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-white">
+      <div className="flex min-h-screen">
         {/* ---------------------------------------------------
-           TOP NAV
+           DESKTOP SIDEBAR
            --------------------------------------------------- */}
 
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-900">
-              <Bot className="h-5 w-5" />
-            </div>
+        <aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white lg:flex lg:flex-col dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex h-20 items-center border-b border-slate-200 px-6 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => setActiveWorkspace("overview")}
+              className="text-left"
+            >
+              <div className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
+                Workivo
+              </div>
 
-            <span className="font-bold text-slate-900 dark:text-white">
-              Workivo
-            </span>
+              <div className="text-[11px] font-medium text-slate-400">
+                AI Resume Co-pilot
+              </div>
+            </button>
           </div>
 
-          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-slate-900">
+          <nav className="flex-1 space-y-1 p-4">
+            {sidebarItems.map((item) => {
+              const Icon = item.icon;
+
+              const active =
+                activeWorkspace === item.id ||
+                (
+                  item.id === "overview" &&
+                  activeWorkspace === null
+                );
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() =>
+                    setActiveWorkspace(
+                      item.id === "overview"
+                        ? null
+                        : item.id
+                    )
+                  }
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
+                    active
+                      ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                      : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="border-t border-slate-200 p-4 dark:border-slate-800">
             <button
               type="button"
-              onClick={closeWorkspace}
-              className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                activeWorkspace === "overview"
-                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-              }`}
+              onClick={() =>
+                setActiveWorkspace("bot")
+              }
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
             >
-              Overview
+              <Bot className="h-4 w-4" />
+              AI Assistant
             </button>
 
             <button
               type="button"
-              onClick={handleATSWorkspace}
-              className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                activeWorkspace === "ats"
-                  ? "bg-blue-600 text-white"
-                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-              }`}
+              onClick={handleLogout}
+              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
             >
-              ATS
+              <LogOut className="h-4 w-4" />
+              Logout
+            </button>
+          </div>
+        </aside>
+
+        {/* ---------------------------------------------------
+           MAIN AREA
+           --------------------------------------------------- */}
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* MOBILE HEADER */}
+
+          <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-900/95">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <Menu className="h-5 w-5" />
             </button>
 
             <button
               type="button"
-              onClick={handleTailoredWorkspace}
-              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition sm:block ${
-                activeWorkspace === "tailored"
-                  ? "bg-purple-600 text-white"
-                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-              }`}
+              onClick={() => setActiveWorkspace(null)}
+              className="text-center"
             >
-              AI Resume
-            </button>
+              <div className="text-lg font-black tracking-tight text-slate-900 dark:text-white">
+                Workivo
+              </div>
 
-            <button
-              type="button"
-              onClick={handleMatchingWorkspace}
-              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition md:block ${
-                activeWorkspace === "matching"
-                  ? "bg-emerald-600 text-white"
-                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-              }`}
-            >
-              Jobs
-            </button>
-
-            <button
-              type="button"
-              onClick={handleTrackerWorkspace}
-              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition lg:block ${
-                activeWorkspace === "tracker"
-                  ? "bg-orange-600 text-white"
-                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-              }`}
-            >
-              Tracker
+              <div className="text-[9px] font-medium text-slate-400">
+                AI Resume Co-pilot
+              </div>
             </button>
 
             <button
               type="button"
               onClick={() =>
-                openWorkspace("insights")
+                setActiveWorkspace("bot")
               }
-              className={`hidden rounded-lg px-3 py-2 text-xs font-semibold transition xl:block ${
-                activeWorkspace === "insights"
-                  ? "bg-slate-700 text-white"
-                  : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
-              }`}
+              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
             >
-              Insights
+              <Bot className="h-5 w-5" />
             </button>
-          </div>
-        </div>
+          </header>
 
-        {/* ---------------------------------------------------
-           MAIN WORKSPACE
-           --------------------------------------------------- */}
+          {/* -------------------------------------------------
+             MOBILE DRAWER
+             ------------------------------------------------- */}
 
-        <div
-          className={
-            showWorkspace
-              ? "rounded-3xl"
-              : ""
-          }
-        >
-          {renderWorkspace()}
-        </div>
-      </div>
-
-      {/* =======================================================
-          FLOATING WORKIVO BOT
-
-          Frontend-only shell for now. The AI/backend connection
-          can be wired into handleBotSubmit later.
-          ======================================================= */}
-
-      {isBotOpen && (
-        <div className="fixed bottom-24 right-4 z-50 w-[calc(100vw-2rem)] max-w-sm overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:right-6">
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white dark:bg-white dark:text-slate-900">
-                <Bot className="h-5 w-5" />
-              </div>
-
-              <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                  Workivo Bot
-                </p>
-
-                <p className="text-xs text-slate-400">
-                  AI assistant
-                </p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsBotOpen(false)}
-              className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-              aria-label="Close Workivo Bot"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="max-h-80 space-y-3 overflow-y-auto p-4">
-            {botMessages.map(
-              (message, index) => (
-                <div
-                  key={`${message.role}-${index}`}
-                  className={`flex ${
-                    message.role === "user"
-                      ? "justify-end"
-                      : "justify-start"
-                  }`}
-                >
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
-                      message.role === "user"
-                        ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                        : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
-                    }`}
-                  >
-                    {message.text}
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-
-          <div className="border-t border-slate-200 p-3 dark:border-slate-800">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-1.5 dark:border-slate-700 dark:bg-slate-950">
-              <input
-                type="text"
-                value={botInput}
-                onChange={(event) =>
-                  setBotInput(event.target.value)
-                }
-                onKeyDown={handleBotKeyDown}
-                placeholder="Ask Workivo Bot..."
-                className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
-              />
-
+          {mobileMenuOpen && (
+            <div className="fixed inset-0 z-50 lg:hidden">
               <button
                 type="button"
-                onClick={handleBotSubmit}
-                disabled={!botInput.trim()}
-                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
-              >
-                Send
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                aria-label="Close menu"
+                onClick={() =>
+                  setMobileMenuOpen(false)
+                }
+                className="absolute inset-0 bg-slate-950/40"
+              />
 
-      <button
-        type="button"
-        onClick={() =>
-          setIsBotOpen((previousOpen) => !previousOpen)
-        }
-        className="fixed bottom-6 right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-xl transition hover:scale-105 hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 sm:right-6"
-        aria-label="Open Workivo Bot"
-      >
-        {isBotOpen ? (
-          <X className="h-6 w-6" />
-        ) : (
-          <Bot className="h-6 w-6" />
-        )}
-      </button>
+              <aside className="relative flex h-full w-72 flex-col bg-white shadow-xl dark:bg-slate-900">
+                <div className="flex h-20 items-center justify-between border-b border-slate-200 px-5 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveWorkspace(null);
+                      setMobileMenuOpen(false);
+                    }}
+                    className="text-left"
+                  >
+                    <div className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
+                      Workivo
+                    </div>
+
+                    <div className="text-[11px] font-medium text-slate-400">
+                      AI Resume Co-pilot
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMobileMenuOpen(false)
+                    }
+                    className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <nav className="flex-1 space-y-1 p-4">
+                  {sidebarItems.map((item) => {
+                    const Icon = item.icon;
+
+                    const active =
+                      activeWorkspace === item.id ||
+                      (
+                        item.id === "overview" &&
+                        activeWorkspace === null
+                      );
+
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveWorkspace(
+                            item.id === "overview"
+                              ? null
+                              : item.id
+                          );
+
+                          setMobileMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
+                          active
+                            ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                            : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </nav>
+
+                <div className="border-t border-slate-200 p-4 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveWorkspace("bot");
+                      setMobileMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                  >
+                    <Bot className="h-4 w-4" />
+                    AI Assistant
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Logout
+                  </button>
+                </div>
+              </aside>
+            </div>
+          )}
+
+          {/* -------------------------------------------------
+             PAGE CONTENT
+             ------------------------------------------------- */}
+
+          <main className="flex-1 p-4 sm:p-6 lg:p-8">
+            <div className="mx-auto max-w-7xl">
+              {renderWorkspace()}
+            </div>
+          </main>
+        </div>
+      </div>
     </div>
   );
 }
+
