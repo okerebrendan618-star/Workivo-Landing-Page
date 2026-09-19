@@ -2122,31 +2122,6 @@ export default function DashboardContent() {
       </div>
     );
   };
-
-      setUsage((previousUsage) => ({
-        ...previousUsage,
-        tailoredResumes: nextTailoredCount,
-      }));
-
-      alert(
-        "Your resume has been tailored and saved successfully!"
-      );
-    } catch (error) {
-      console.error(
-        "TAILOR RESUME ERROR:",
-        error
-      );
-
-      alert(
-        error instanceof Error
-          ? error.message
-          : "AI resume tailoring failed."
-      );
-    } finally {
-      setIsTailoring(false);
-    }
-  };
-
   /* =========================================================
      ATS SCAN PIPELINE
      
