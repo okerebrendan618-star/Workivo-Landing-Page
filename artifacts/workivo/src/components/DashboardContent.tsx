@@ -22,6 +22,7 @@ import {
   Menu,
   Plus,
   Target,
+  Globe2,
 } from "lucide-react";
 
 import { useRef, useEffect, useState } from "react";
@@ -998,7 +999,7 @@ export default function DashboardContent() {
       alert(
         error instanceof Error
           ? error.message
-                  : "AI scan failed."
+          : "AI scan failed."
       );
     } finally {
       setIsScanning(false);
@@ -1286,12 +1287,6 @@ export default function DashboardContent() {
       }
 
       /* -----------------------------------------------------
-         UPDATE JOB RESULTS
-         ----------------------------------------------------- */
-
-      setMatchingJobs(normalizedJobs);
-
-      /* -----------------------------------------------------
          SYNC USAGE FROM THE EDGE FUNCTION
 
          IMPORTANT:
@@ -1320,6 +1315,15 @@ export default function DashboardContent() {
           "Job matching response did not contain valid usage information."
         );
       }
+
+      /* -----------------------------------------------------
+         UPDATE JOB RESULTS
+
+         Only update the visible jobs after the complete
+         response has passed validation.
+         ----------------------------------------------------- */
+
+      setMatchingJobs(normalizedJobs);
 
       setUsage((previousUsage) => ({
         ...previousUsage,
@@ -2584,7 +2588,7 @@ export default function DashboardContent() {
                         </div>
                       )}
 
-                      {/* AI REASON */}
+                                            {/* AI REASON */}
                       {reason && (
                         <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50/60 p-4 dark:border-emerald-500/10 dark:bg-emerald-500/5">
                           <div className="flex items-start gap-3">
@@ -2818,12 +2822,12 @@ export default function DashboardContent() {
   };
 
   /* =========================================================
-     BOT WORKSPACE
+     FLOATING WORKIVO BOT
      ========================================================= */
 
   const renderBotWorkspace = () => {
     return (
-      <div className="flex min-h-[650px] flex-col rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="fixed bottom-24 right-6 z-50 flex h-[620px] w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-5 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">
@@ -2843,7 +2847,7 @@ export default function DashboardContent() {
 
           <button
             type="button"
-            onClick={closeWorkspace}
+            onClick={() => setIsBotOpen(false)}
             className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
           >
             <X className="h-5 w-5" />
@@ -3051,19 +3055,8 @@ export default function DashboardContent() {
           <div className="border-t border-slate-200 p-4 dark:border-slate-800">
             <button
               type="button"
-              onClick={() =>
-                setActiveWorkspace("bot")
-              }
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-            >
-              <Bot className="h-4 w-4" />
-              AI Assistant
-            </button>
-
-            <button
-              type="button"
               onClick={handleLogout}
-              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
             >
               <LogOut className="h-4 w-4" />
               Logout
@@ -3101,15 +3094,7 @@ export default function DashboardContent() {
               </div>
             </button>
 
-            <button
-              type="button"
-              onClick={() =>
-                setActiveWorkspace("bot")
-              }
-              className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              <Bot className="h-5 w-5" />
-            </button>
+            <div className="w-9" />
           </header>
 
           {/* -------------------------------------------------
@@ -3194,23 +3179,12 @@ export default function DashboardContent() {
                     );
                   })}
                 </nav>
-                                <div className="border-t border-slate-200 p-4 dark:border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveWorkspace("bot");
-                      setMobileMenuOpen(false);
-                    }}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-                  >
-                    <Bot className="h-4 w-4" />
-                    AI Assistant
-                  </button>
 
+                <div className="border-t border-slate-200 p-4 dark:border-slate-800">
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
                   >
                     <LogOut className="h-4 w-4" />
                     Logout
@@ -3229,12 +3203,33 @@ export default function DashboardContent() {
               {renderWorkspace()}
             </div>
           </main>
+
+          {/* -------------------------------------------------
+             FLOATING WORKIVO BOT BUTTON + PANEL
+             ------------------------------------------------- */}
+
+          {isBotOpen && renderBotWorkspace()}
+
+          <button
+            type="button"
+            onClick={() =>
+              setIsBotOpen((previous) => !previous)
+            }
+            aria-label={
+              isBotOpen
+                ? "Close Workivo Bot"
+                : "Open Workivo Bot"
+            }
+            className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-purple-600 text-white shadow-[0_0_25px_rgba(147,51,234,0.55)] transition hover:scale-105 hover:bg-purple-700 hover:shadow-[0_0_35px_rgba(147,51,234,0.7)] dark:bg-purple-500 dark:hover:bg-purple-600"
+          >
+            {isBotOpen ? (
+              <X className="h-6 w-6" />
+            ) : (
+              <Bot className="h-6 w-6" />
+            )}
+          </button>
         </div>
       </div>
     </div>
   );
 }
-                
-        
-        
-        
