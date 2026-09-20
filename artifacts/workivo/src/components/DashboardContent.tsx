@@ -16,6 +16,12 @@ import {
   X,
   ChevronRight,
   LockKeyhole,
+  LayoutDashboard,
+  Send,
+  LogOut,
+  Menu,
+  Plus,
+  Target,
 } from "lucide-react";
 
 import { useRef, useEffect, useState } from "react";
@@ -134,12 +140,16 @@ export default function DashboardContent() {
     | "tailored"
     | "matching"
     | "tracker"
-    | "insights";
+    | "insights"
+    | "bot"
+    | null;
 
   const [activeWorkspace, setActiveWorkspace] =
     useState<Workspace>("overview");
 
   const [showWorkspace, setShowWorkspace] = useState(false);
+
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const openWorkspace = (workspace: Workspace) => {
     setActiveWorkspace(workspace);
@@ -149,6 +159,18 @@ export default function DashboardContent() {
   const closeWorkspace = () => {
     setShowWorkspace(false);
     setActiveWorkspace("overview");
+  };
+
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      console.error("LOGOUT ERROR:", error);
+      alert(error.message || "Unable to logout.");
+      return;
+    }
+
+    window.location.reload();
   };
 
   /* =========================================================
@@ -976,7 +998,7 @@ export default function DashboardContent() {
       alert(
         error instanceof Error
           ? error.message
-          : "AI scan failed."
+                  : "AI scan failed."
       );
     } finally {
       setIsScanning(false);
@@ -1976,7 +1998,7 @@ export default function DashboardContent() {
               <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
                 {usage.atsScans} of{" "}
                 {FREE_LIMITS.atsScans} ATS scans used.
-              </p>
+                              </p>
             </div>
           </div>
         </div>
@@ -2122,1125 +2144,6 @@ export default function DashboardContent() {
       </div>
     );
   };
-  /* =========================================================
-     ATS SCAN PIPELINE
-     
-     IMPORTANT SECURITY CHANGE:
-     
-     ❌ NO MAKE WEBHOOK URL IN FRONTEND
-     
-     The frontend now calls a Supabase Edge Function.
-     
-     The Edge Function is responsible for:
-       1. Verifying the user
-       2. Using the fixed ATS job description
-       3. Calling Make securely
-       4. Validating the Make response
-       5. Returning the ATS result
-     
-     The Make webhook URL therefore never reaches the browser.
-     ========================================================= */
-
-  const handleScanResume = async () => {
-    if (!latestResume) {
-      alert("Please upload a resume first.");
-      return;
-    }
-
-    if (!canUseATS) {
-      alert(
-        "You have reached your free ATS scan limit."
-      );
-      return;
-    }
-
-    if (isScanning) return;
-
-    setIsScanning(true);
-
-    try {
-      /* -----------------------------------------------------
-         SECURE SERVER-SIDE ATS REQUEST
-         
-         Edge Function name:
-         ats-scan
-         
-         IMPORTANT:
-         Do NOT put the Make URL here.
-         ----------------------------------------------------- */
-
-      const {
-        data,
-        error,
-      } = await supabase.functions.invoke(
-        "ats-scan",
-        {
-          body: {
-            resume_text:
-              latestResume.resume_text || "",
-
-            /*
-             * Kept here as a fixed value for compatibility.
-             * The server should ultimately own the canonical
-             * value as well.
-             */
-            job_description:
-              STATIC_ATS_JOB_DESCRIPTION,
-          },
-        }
-      );
-
-      if (error) {
-        console.error(
-          "ATS FUNCTION ERROR:",
-          error
-        );
-
-        throw new Error(
-          error.message ||
-            "ATS scan request failed."
-        );
-      }
-
-      /* -----------------------------------------------------
-         RESPONSE VALIDATION
-         ----------------------------------------------------- */
-
-      if (!data || typeof data !== "object") {
-        throw new Error(
-          "Invalid ATS response."
-        );
-      }
-
-      const rawScore =
-        Number(data.ats_score);
-
-      if (
-        !Number.isFinite(rawScore)
-      ) {
-        throw new Error(
-          "ATS response did not contain a valid score."
-        );
-      }
-
-      const atsScore = Math.max(
-        0,
-        Math.min(
-          100,
-          Math.round(rawScore)
-        )
-      );
-
-      const feedback =
-        typeof data.feedback === "string"
-          ? data.feedback
-          : "";
-
-      /* -----------------------------------------------------
-         DATABASE UPDATE
-         ----------------------------------------------------- */
-
-      const {
-        data: updatedResume,
-        error: updateError,
-      } = await supabase
-        .from("resumes")
-        .update({
-          ats_score: atsScore,
-          ai_feedback: feedback,
-        })
-        .eq("id", latestResume.id)
-        .select()
-        .single();
-
-      if (updateError) {
-        console.error(
-          "ATS DATABASE UPDATE ERROR:",
-          updateError
-        );
-
-        throw new Error(
-          "The ATS scan completed, but the result could not be saved."
-        );
-      }
-
-      /* -----------------------------------------------------
-         UPDATE LOCAL RESUME STATE
-         ----------------------------------------------------- */
-
-      setLatestResume({
-        ...latestResume,
-        ...updatedResume,
-        ats_score: atsScore,
-        ai_feedback: feedback,
-      });
-
-      /* -----------------------------------------------------
-         UPDATE UI USAGE
-         ----------------------------------------------------- */
-
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
-
-      if (authError || !user) {
-        throw new Error(
-          authError?.message ||
-            "Please login again before saving usage."
-        );
-      }
-
-      const nextAtsCount =
-        usage.atsScans + 1;
-
-      await persistUsage(user.id, {
-        ...usage,
-        atsScans: nextAtsCount,
-      });
-
-      setUsage((previousUsage) => ({
-        ...previousUsage,
-        atsScans: nextAtsCount,
-      }));
-
-      alert(
-        `ATS Score: ${atsScore}%\n\n${
-          feedback || "No additional feedback provided."
-        }`
-      );
-    } catch (error) {
-      console.error(
-        "ATS SCAN ERROR:",
-        error
-      );
-
-      alert(
-        error instanceof Error
-          ? error.message
-          : "AI scan failed."
-      );
-    } finally {
-      setIsScanning(false);
-    }
-  };
-
-  /* =========================================================
-     USAGE HELPERS
-     ========================================================= */
-
-  const canUseATS =
-    usage.atsScans < FREE_LIMITS.atsScans;
-
-  const canUseTailoredResume =
-    usage.tailoredResumes <
-    FREE_LIMITS.tailoredResumes;
-
-  const canUseJobMatches =
-    usage.jobMatches <
-    FREE_LIMITS.jobMatches;
-
-  const canUseTracker =
-    usage.trackedApplications <
-    FREE_LIMITS.trackedApplications;
-
-  /* =========================================================
-     ATS SCORE DISPLAY
-     ========================================================= */
-
-  const atsScore =
-    latestResume?.ats_score !== null &&
-    latestResume?.ats_score !== undefined
-      ? Number(latestResume.ats_score)
-      : null;
-
-  const atsFeedback =
-    typeof latestResume?.ai_feedback === "string"
-      ? latestResume.ai_feedback
-      : "";
-
-  /* =========================================================
-     WORKSPACE ACTIONS
-     ========================================================= */
-
-  const handleATSWorkspace = () => {
-    if (!latestResume) {
-      alert("Please upload a resume first.");
-      return;
-    }
-
-    openWorkspace("ats");
-  };
-
-  const handleTailoredWorkspace = () => {
-    if (!canUseTailoredResume) {
-      alert(
-        "You have reached your free tailored resume limit."
-      );
-      return;
-    }
-
-    if (!latestResume) {
-      alert("Please upload a resume first.");
-      return;
-    }
-
-    openWorkspace("tailored");
-  };
-
-  const handleMatchingWorkspace = () => {
-    if (!canUseJobMatches) {
-      alert(
-        "You have reached your free job matching limit."
-      );
-      return;
-    }
-
-    openWorkspace("matching");
-  };
-
-  const handleTrackerWorkspace = () => {
-    
-    if (!canUseTracker) {
-      alert(
-        "You have reached your free application tracker limit."
-      );
-      return;
-    }
-
-    openWorkspace("tracker");
-  };
-
-  /* =========================================================
-     JOB MATCHING
-     
-     NEW FEATURE
-     
-     Flow:
-     
-     Dashboard
-        ↓
-     Supabase Edge Function
-        ↓
-     Make Job Matching Webhook
-        ↓
-     Himalayas jobs
-        ↓
-     MiniMax ranking
-        ↓
-     Edge Function normalization
-        ↓
-     Dashboard job cards
-     ========================================================= */
-
-  const handleFindMatchingJobs = async () => {
-    if (!latestResume) {
-      alert("Please upload a resume first.");
-      return;
-    }
-
-    if (!canUseJobMatches) {
-      alert(
-        "You have reached your free job matching limit."
-      );
-      return;
-    }
-
-    if (isMatching) return;
-
-    const resumeText =
-      typeof latestResume.resume_text === "string"
-        ? latestResume.resume_text.trim()
-        : "";
-
-    if (!resumeText) {
-      alert(
-        "Your resume does not contain readable text. Please upload your resume again."
-      );
-      return;
-    }
-
-    setIsMatching(true);
-
-    try {
-      /* -----------------------------------------------------
-         SECURE JOB MATCHING REQUEST
-         
-         IMPORTANT:
-         The Make webhook URL is NOT in the frontend.
-         
-         Supabase Edge Function:
-         job-matching
-         
-         Only the resume text is sent.
-         Make itself fetches the available jobs.
-         ----------------------------------------------------- */
-
-      const {
-        data,
-        error,
-      } = await supabase.functions.invoke(
-        "job-matching",
-        {
-          body: {
-            resume_text: resumeText,
-          },
-        }
-      );
-
-      if (error) {
-        console.error(
-          "JOB MATCHING FUNCTION ERROR:",
-          error
-        );
-
-        throw new Error(
-          error.message ||
-            "Job matching request failed."
-        );
-      }
-
-      /* -----------------------------------------------------
-         RESPONSE VALIDATION
-         ----------------------------------------------------- */
-
-      if (
-        !data ||
-        typeof data !== "object" ||
-        !Array.isArray(data.jobs)
-      ) {
-        throw new Error(
-          "Invalid job matching response."
-        );
-      }
-
-      /* -----------------------------------------------------
-         NORMALIZE + SORT JOBS
-         
-         The Edge Function already normalizes the old
-         trailing-space keys, but this extra defensive layer
-         prevents the UI from breaking if an older response
-         ever reaches the frontend.
-         ----------------------------------------------------- */
-
-      const normalizedJobs = data.jobs
-        .filter(
-          (job: any) =>
-            job &&
-            typeof job === "object"
-        )
-        .map((job: any) => ({
-          ...job,
-
-          job_id:
-            job.job_id ?? null,
-
-          title:
-            job.title ?? "",
-
-          companyName:
-            job.companyName ?? "",
-
-          excerpt:
-            job.excerpt !== undefined
-              ? job.excerpt
-              : job["excerpt "] ?? "",
-
-          employmentType:
-            job.employmentType ?? "",
-
-          seniority:
-            job.seniority !== undefined
-              ? job.seniority
-              : job["seniority "] ?? "",
-
-          categories:
-            job.categories !== undefined
-              ? job.categories
-              : job["categories "] ?? "",
-
-          salaryPeriod:
-            job.salaryPeriod ?? "",
-
-          minSalary:
-            job.minSalary ?? null,
-
-          maxSalary:
-            job.maxSalary !== undefined
-              ? job.maxSalary
-              : job["maxSalary "] ?? null,
-
-          applicationLink:
-            job.applicationLink ?? "",
-
-          timezoneRestriction:
-            job.timezoneRestriction ?? "",
-
-          match_score:
-            Number(job.match_score) || 0,
-
-          match_level:
-            job.match_level ?? "",
-
-          reason:
-            job.reason ?? "",
-
-          matching_skills:
-            Array.isArray(job.matching_skills)
-              ? job.matching_skills.filter(Boolean)
-              : [],
-
-          missing_skills:
-            Array.isArray(job.missing_skills)
-              ? job.missing_skills.filter(Boolean)
-              : [],
-        }))
-        .sort(
-          (a: any, b: any) =>
-            b.match_score - a.match_score
-        );
-
-      if (normalizedJobs.length === 0) {
-        throw new Error(
-          "No matching jobs were returned. Please try again later."
-        );
-      }
-
-      /* -----------------------------------------------------
-         UPDATE JOB RESULTS
-         ----------------------------------------------------- */
-
-      setMatchingJobs(normalizedJobs);
-
-      /* -----------------------------------------------------
-         SYNC USAGE FROM THE EDGE FUNCTION
-         
-         IMPORTANT:
-         The Job Matching Edge Function + database are now the
-         source of truth for Job Matching usage.
-         
-         Do NOT increment jobMatches locally and do NOT call
-         persistUsage() here. The Edge Function has already
-         reserved the usage before Make was called.
-         
-         On success, the Edge Function returns:
-         data.usage.job_matches
-         ----------------------------------------------------- */
-
-      const serverJobMatchCount =
-        Number(data?.usage?.job_matches);
-
-      if (
-        !Number.isFinite(serverJobMatchCount) ||
-        serverJobMatchCount < 0
-      ) {
-        throw new Error(
-          "Job matching response did not contain valid usage information."
-        );
-      }
-
-      setUsage((previousUsage) => ({
-        ...previousUsage,
-        jobMatches: Math.min(
-          FREE_LIMITS.jobMatches,
-          serverJobMatchCount
-        ),
-      }));
-    } catch (error) {
-      console.error(
-        "JOB MATCHING ERROR:",
-        error
-      );
-
-      alert(
-        error instanceof Error
-          ? error.message
-          : "Job matching failed."
-      );
-    } finally {
-      setIsMatching(false);
-    }
-  };
-
-  /* =========================================================
-     JOB MATCHING DISPLAY HELPERS
-     
-     NEW:
-     These helpers are only used by the Job Matching workspace.
-     ========================================================= */
-
-  const formatSalary = (
-    minSalary: any,
-    maxSalary: any,
-    salaryPeriod: any
-  ) => {
-    const min =
-      Number.isFinite(Number(minSalary))
-        ? Number(minSalary)
-        : null;
-
-    const max =
-      Number.isFinite(Number(maxSalary))
-        ? Number(maxSalary)
-        : null;
-
-    if (min === null && max === null) {
-      return "";
-    }
-
-    let salaryText = "";
-
-    if (min !== null && max !== null) {
-      salaryText =
-        min === max
-          ? `${min.toLocaleString()}`
-          : `${min.toLocaleString()} – ${max.toLocaleString()}`;
-    } else if (min !== null) {
-      salaryText = `From ${min.toLocaleString()}`;
-    } else if (max !== null) {
-      salaryText = `Up to ${max.toLocaleString()}`;
-    }
-
-    if (
-      typeof salaryPeriod === "string" &&
-      salaryPeriod.trim()
-    ) {
-      return `${salaryText} / ${salaryPeriod}`;
-    }
-
-    return salaryText;
-  };
-
-  const formatCategories = (
-    categories: any
-  ) => {
-    if (Array.isArray(categories)) {
-      return categories
-        .filter(Boolean)
-        .join(" • ");
-    }
-
-    if (
-      typeof categories === "string"
-    ) {
-      return categories.trim();
-    }
-
-    return "";
-  };
-
-  const getMatchLevelClass = (
-    matchLevel: string
-  ) => {
-    const normalized =
-      matchLevel
-        .toLowerCase()
-        .trim();
-
-    if (
-      normalized.includes("excellent") ||
-      normalized.includes("strong")
-    ) {
-      return "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400";
-    }
-
-    if (
-      normalized.includes("good") ||
-      normalized.includes("high")
-    ) {
-      return "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400";
-    }
-
-    if (
-      normalized.includes("fair") ||
-      normalized.includes("moderate")
-    ) {
-      return "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400";
-    }
-
-    return "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
-  };
-
-  /* =========================================================
-     WORKIVO BOT UI HANDLERS
-     ========================================================= */
-
-  const handleBotSubmit = () => {
-    const message = botInput.trim();
-
-    if (!message) return;
-
-    setBotMessages((previousMessages) => [
-      ...previousMessages,
-      {
-        role: "user",
-        text: message,
-      },
-      {
-        role: "assistant",
-        text:
-          "I’m connected to the Workivo dashboard UI, but my AI backend isn’t connected yet. Once the bot backend is ready, I’ll be able to answer this properly.",
-      },
-    ]);
-
-    setBotInput("");
-  };
-
-  const handleBotKeyDown = (
-    event: React.KeyboardEvent<HTMLInputElement>
-  ) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      handleBotSubmit();
-    }
-  };
-
-  /* =========================================================
-     OVERVIEW CARD
-     ========================================================= */
-
-  const renderOverview = () => {
-    return (
-      <div className="space-y-6">
-        {/* ---------------------------------------------------
-           HEADER
-           --------------------------------------------------- */}
-
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-              AI Resume Dashboard
-            </h1>
-
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Upload your resume, improve your ATS score,
-              and manage your job applications.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleUploadClick}
-            disabled={isUploading}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
-          >
-            <UploadCloud className="h-4 w-4" />
-
-            {isUploading
-              ? "Uploading..."
-              : "Upload Resume"}
-          </button>
-        </div>
-
-        {/* ---------------------------------------------------
-           HIDDEN FILE INPUT
-           --------------------------------------------------- */}
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="application/pdf,.pdf"
-          onChange={handleFileUpload}
-          className="hidden"
-        />
-
-        {/* ---------------------------------------------------
-           RESUME STATUS
-           --------------------------------------------------- */}
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-                <FileText className="h-6 w-6" />
-              </div>
-
-              <div>
-                <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                  Latest Resume
-                </p>
-
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  {latestResume
-                    ? latestResume.file_name?.split("/").pop() ||
-                      "Resume uploaded"
-                    : "No resume uploaded yet"}
-                </p>
-              </div>
-            </div>
-
-            {latestResume && (
-              <div className="flex items-center gap-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="h-4 w-4" />
-                Resume ready
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ---------------------------------------------------
-           FEATURE CARDS
-           --------------------------------------------------- */}
-
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {/* ATS */}
-          <button
-            type="button"
-            onClick={handleATSWorkspace}
-            className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-blue-500/30"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-                <ScanSearch className="h-5 w-5" />
-              </div>
-
-              <ArrowUpRight className="h-4 w-4 text-slate-400 transition group-hover:text-blue-500" />
-            </div>
-
-  /* =========================================================
-     ATS WORKSPACE
-     ========================================================= */
-
-  const renderATSWorkspace = () => {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
-              AI Resume Co-pilot
-            </p>
-
-            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
-              ATS Scanner
-            </h2>
-
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Analyze your resume against ATS requirements.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={closeWorkspace}
-            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 lg:col-span-2">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-                <ScanSearch className="h-5 w-5" />
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  Resume ATS Analysis
-                </h3>
-
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Fixed job profile analysis
-                </p>
-              </div>
-            </div>
-                        <div className="mt-8">
-              {atsScore !== null ? (
-                <div>
-                  <div className="text-6xl font-bold text-slate-900 dark:text-white">
-                    {atsScore}
-                    <span className="text-2xl text-slate-400">
-                      /100
-                    </span>
-                  </div>
-
-                  <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                    <div
-                      className="h-full rounded-full bg-blue-600 transition-all"
-                      style={{
-                        width: `${atsScore}%`,
-                      }}
-                    />
-                  </div>
-
-                  <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
-                    <p className="whitespace-pre-wrap text-sm leading-6 text-slate-600 dark:text-slate-300">
-                      {atsFeedback ||
-                        "No additional feedback provided."}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
-                  <ScanSearch className="mx-auto h-8 w-8 text-slate-400" />
-
-                  <p className="mt-3 font-medium text-slate-700 dark:text-slate-300">
-                    No ATS result yet
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    Run your first scan to see your score.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={handleScanResume}
-              disabled={
-                !latestResume ||
-                isScanning ||
-                !canUseATS
-              }
-              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isScanning ? (
-                <>
-                  <Activity className="h-4 w-4 animate-pulse" />
-                  Scanning Resume...
-                </>
-              ) : (
-                <>
-                  <ScanSearch className="h-4 w-4" />
-                  Run ATS Scan
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex items-center gap-3">
-                <Bot className="h-5 w-5 text-purple-500" />
-
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  AI Analysis
-                </h3>
-              </div>
-
-              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                Your resume is sent through the secure
-                server-side ATS pipeline. The Make webhook
-                URL is not exposed in the browser.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex items-center gap-3">
-                <LockKeyhole className="h-5 w-5 text-emerald-500" />
-
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  Secure Pipeline
-                </h3>
-              </div>
-
-              <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                Browser → Supabase Edge Function → Make →
-                ATS result.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex items-center gap-3">
-                <Zap className="h-5 w-5 text-amber-500" />
-
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  Free Usage
-                </h3>
-              </div>
-
-              <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
-                {usage.atsScans} of{" "}
-                {FREE_LIMITS.atsScans} ATS scans used.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  /* =========================================================
-     TAILORED RESUME WORKSPACE
-     ========================================================= */
-
-  const renderTailoredWorkspace = () => {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
-              AI Resume Co-pilot
-            </p>
-
-            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
-              AI Resume Writer
-            </h2>
-
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Tailor your resume to a specific job.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={closeWorkspace}
-            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-
-          {/* LEFT SIDE */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
-                <WandSparkles className="h-5 w-5" />
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  Tailor Resume
-                </h3>
-
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Match your resume to the job description.
-                </p>
-              </div>
-            </div>
-
-            {/* CURRENT RESUME */}
-
-            <div className="mt-6 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Current Resume
-              </p>
-
-              <p className="mt-2 truncate text-sm font-medium text-slate-700 dark:text-slate-300">
-                {latestResume?.file_name
-                  ?.split("/")
-                  .pop() ||
-                  "No resume selected"}
-              </p>
-            </div>
-
-            {/* JOB DESCRIPTION */}
-
-            <div className="mt-6">
-              <label className="text-sm font-semibold text-slate-900 dark:text-white">
-                Job Description
-              </label>
-
-              <textarea
-                value={jobDescription}
-                onChange={(event) =>
-                  setJobDescription(
-                    event.target.value
-                  )
-                }
-                placeholder="Paste the job description here..."
-                rows={10}
-                className="mt-2 w-full resize-none rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-900 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-              />
-            </div>
-
-            {/* BUTTON */}
-
-            <button
-              type="button"
-              onClick={handleTailorResume}
-              disabled={
-                !latestResume ||
-                !jobDescription.trim() ||
-                isTailoring ||
-                !canUseTailoredResume
-              }
-              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-purple-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isTailoring ? (
-                <>
-                  <Activity className="h-4 w-4 animate-pulse" />
-                  Tailoring Resume...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  Tailor Resume
-                </>
-              )}
-            </button>
-
-            <p className="mt-3 text-center text-xs text-slate-400">
-              {usage.tailoredResumes}/
-              {FREE_LIMITS.tailoredResumes} free rewrites used
-            </p>
-          </div>
-
-          {/* RIGHT SIDE */}
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
-                <FileText className="h-5 w-5" />
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-slate-900 dark:text-white">
-                  Tailored Resume
-                </h3>
-
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Your AI-generated resume will appear here.
-                </p>
-              </div>
-            </div>
-
-            {tailoredResume ? (
-              <div className="mt-6">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Saved to your account
-                  </span>
-
-                  <span className="text-xs text-slate-400">
-                    Persists after refresh
-                  </span>
-                </div>
-
-                <div className="max-h-[600px] overflow-y-auto rounded-xl bg-slate-50 p-5 dark:bg-slate-800/60">
-                  <pre className="whitespace-pre-wrap font-sans text-sm leading-7 text-slate-700 dark:text-slate-300">
-                    {tailoredResume}
-                  </pre>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-6 flex min-h-[400px] items-center justify-center rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
-                <div>
-                  <WandSparkles className="mx-auto h-8 w-8 text-slate-400" />
-
-                  <p className="mt-3 font-medium text-slate-700 dark:text-slate-300">
-                    No tailored resume yet
-                  </p>
-
-                  <p className="mt-1 max-w-sm text-sm leading-6 text-slate-500">
-                    Paste a job description and click
-                    "Tailor Resume" to generate your customized resume.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
 
   /* =========================================================
      JOB MATCHING WORKSPACE
@@ -3338,9 +2241,9 @@ export default function DashboardContent() {
                 isMatching ||
                 !canUseJobMatches
               }
-              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isMatching ? (
+                            {isMatching ? (
                 <>
                   <Activity className="h-4 w-4 animate-pulse" />
                   Finding Jobs...
@@ -3381,6 +2284,7 @@ export default function DashboardContent() {
               className="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
             >
               <UploadCloud className="h-4 w-4" />
+
               {isUploading
                 ? "Uploading..."
                 : "Upload Resume"}
@@ -3759,7 +2663,80 @@ export default function DashboardContent() {
                         </div>
                       )}
 
-                      {/* BOTTOM INFO + APPLY */}
+                      {timezoneRestriction && (
+                        <div className="mt-4 flex items-start gap-2 text-xs text-slate-500 dark:text-slate-400">
+                          <Globe2 className="mt-0.5 h-4 w-4 shrink-0" />
+
+                          <span>
+                            {timezoneRestriction}
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-xs text-slate-400">
+                          {job.job_id
+                            ? `Job ID: ${job.job_id}`
+                            : "Matched opportunity"}
+                        </div>
+
+                        {applicationLink ? (
+                          <a
+                            href={applicationLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
+                          >
+                            <ArrowUpRight className="h-4 w-4" />
+                            View & Apply
+                          </a>
+                        ) : (
+                          <span className="text-xs text-slate-400">
+                            Application link unavailable
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+              )}
+            </div>
+          )}
+      </div>
+    );
+  };
+
+  /* =========================================================
+     JOB TRACKER WORKSPACE
+     ========================================================= */
+
+  const renderTrackerWorkspace = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-orange-600 dark:text-orange-400">
+              AI Resume Co-pilot
+            </p>
+
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">
+              Job Application Tracker
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Keep your applications organized and moving forward.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            className="rounded-xl border border-slate-200 p-2.5 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+                              {/* BOTTOM INFO + APPLY */}
                       <div className="mt-5 flex flex-col gap-4 border-t border-slate-100 pt-5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
                         <div className="space-y-1">
                           {timezoneRestriction && (
@@ -4290,8 +3267,7 @@ export default function DashboardContent() {
                     );
                   })}
                 </nav>
-
-                <div className="border-t border-slate-200 p-4 dark:border-slate-800">
+                                <div className="border-t border-slate-200 p-4 dark:border-slate-800">
                   <button
                     type="button"
                     onClick={() => {
@@ -4331,4 +3307,7 @@ export default function DashboardContent() {
     </div>
   );
 }
-
+                
+        
+        
+        
