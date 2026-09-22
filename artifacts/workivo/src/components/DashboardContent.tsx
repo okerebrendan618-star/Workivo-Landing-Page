@@ -2075,11 +2075,12 @@ export default function DashboardContent() {
     </p>
 
     <p className="mt-1 text-xs text-slate-400">
-      Available before upgrade
-    </p>
-  </div>
+  Available before upgrade
+</p>
 </div>
 </div>
+</div>
+  );
 };
 
 /* =========================================================
