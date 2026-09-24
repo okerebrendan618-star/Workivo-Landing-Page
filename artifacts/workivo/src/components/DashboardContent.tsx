@@ -2535,7 +2535,7 @@ const renderMatchingWorkspace = () => {
         </div>
       </div>
 
-      {/* ---------------------------------------------------
+            {/* ---------------------------------------------------
          NO RESUME STATE
          --------------------------------------------------- */}
 
@@ -2965,15 +2965,81 @@ const renderMatchingWorkspace = () => {
                       </div>
 
                       {applicationLink ? (
-                        <a
-                          href={applicationLink}
-                          target="_blank"
-                          rel="noreferrer"
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const fallbackUrl = applicationLink;
+
+                            // Open immediately so the browser does not block
+                            // the new tab while Workivo resolves the link.
+                            const applyWindow = window.open(
+                              fallbackUrl,
+                              "_blank",
+                              "noopener,noreferrer"
+                            );
+
+                            if (!applyWindow) {
+                              window.location.href = fallbackUrl;
+                              return;
+                            }
+
+                            try {
+                              const resolverUrl =
+                                `/api/resolve-apply?url=${encodeURIComponent(
+                                  applicationLink
+                                )}`;
+
+                              const response = await fetch(
+                                resolverUrl,
+                                {
+                                  method: "GET",
+                                  headers: {
+                                    Accept: "application/json",
+                                  },
+                                }
+                              );
+
+                              if (!response.ok) {
+                                throw new Error(
+                                  `Resolver returned ${response.status}`
+                                );
+                              }
+
+                              const result =
+                                await response.json();
+
+                              const resolvedUrl =
+                                typeof result?.applyUrl === "string"
+                                  ? result.applyUrl.trim()
+                                  : "";
+
+                              if (
+                                resolvedUrl &&
+                                /^https?:\/\//i.test(
+                                  resolvedUrl
+                                )
+                              ) {
+                                applyWindow.location.href =
+                                  resolvedUrl;
+                              } else {
+                                applyWindow.location.href =
+                                  fallbackUrl;
+                              }
+                            } catch (error) {
+                              console.warn(
+                                "Workivo apply resolver failed. Using original application link.",
+                                error
+                              );
+
+                              applyWindow.location.href =
+                                fallbackUrl;
+                            }
+                          }}
                           className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-slate-800 hover:shadow-md dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
                         >
                           <ArrowUpRight className="h-4 w-4" />
                           View & Apply
-                        </a>
+                        </button>
                       ) : (
                         <span className="text-xs text-slate-400">
                           Application link unavailable
@@ -2989,7 +3055,6 @@ const renderMatchingWorkspace = () => {
     </div>
   );
 };
-
 /* =========================================================
    TRACKER WORKSPACE
    ========================================================= */
