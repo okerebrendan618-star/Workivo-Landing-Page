@@ -3,9 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
-
 const app: Express = express();
-
 app.use(
   pinoHttp({
     logger,
@@ -25,11 +23,9 @@ app.use(
     },
   }),
 );
-
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 /**
  * Workivo Apply Link Resolver
  *
@@ -43,15 +39,12 @@ app.use(express.urlencoded({ extended: true }));
  */
 app.get("/api/resolve-apply", async (req, res) => {
   const rawUrl = req.query.url;
-
   if (typeof rawUrl !== "string" || !rawUrl.trim()) {
     return res.status(400).json({
       error: "Missing job URL.",
     });
   }
-
   let jobUrl: URL;
-
   try {
     jobUrl = new URL(rawUrl);
   } catch {
@@ -59,7 +52,6 @@ app.get("/api/resolve-apply", async (req, res) => {
       error: "Invalid job URL.",
     });
   }
-
   /**
    * Only allow Himalayas URLs.
    * This prevents this endpoint from becoming an arbitrary
@@ -69,13 +61,11 @@ app.get("/api/resolve-apply", async (req, res) => {
     "himalayas.app",
     "www.himalayas.app",
   ]);
-
   if (!allowedHosts.has(jobUrl.hostname.toLowerCase())) {
     return res.status(400).json({
       error: "Only Himalayas job URLs can be resolved.",
     });
   }
-
   try {
     const response = await fetch(jobUrl.toString(), {
       method: "GET",
@@ -87,17 +77,14 @@ app.get("/api/resolve-apply", async (req, res) => {
       },
       signal: AbortSignal.timeout(10000),
     });
-
     const finalUrl = response.url || jobUrl.toString();
     const html = await response.text();
-
     /**
      * If Himalayas itself redirected the request to another
      * domain, that destination is already the application URL.
      */
     try {
       const finalParsedUrl = new URL(finalUrl);
-
       if (
         !allowedHosts.has(
           finalParsedUrl.hostname.toLowerCase(),
@@ -114,9 +101,7 @@ app.get("/api/resolve-apply", async (req, res) => {
     } catch {
       // Continue with HTML inspection.
     }
-
     let applyUrl: string | null = null;
-
     /**
      * Look for an anchor containing "Apply" text.
      *
@@ -125,19 +110,14 @@ app.get("/api/resolve-apply", async (req, res) => {
      */
     const applyLinkRegex =
       /<a\b[^>]*href=["']([^"']+)["'][^>]*>[\s\S]{0,500}?apply(?:\s+now)?[\s\S]{0,500}?<\/a>/gi;
-
     let match: RegExpExecArray | null;
-
     while ((match = applyLinkRegex.exec(html)) !== null) {
       const candidate = match[1]?.trim();
-
       if (!candidate) {
         continue;
       }
-
       try {
         const absoluteCandidate = new URL(candidate, finalUrl);
-
         if (
           !allowedHosts.has(
             absoluteCandidate.hostname.toLowerCase(),
@@ -150,7 +130,6 @@ app.get("/api/resolve-apply", async (req, res) => {
         // Ignore malformed links.
       }
     }
-
     /**
      * Second lightweight attempt:
      * search the HTML for external URLs containing
@@ -159,13 +138,10 @@ app.get("/api/resolve-apply", async (req, res) => {
     if (!applyUrl) {
       const externalUrlRegex =
         /https?:\/\/[^\s"'<>\\]+/gi;
-
       const urls = html.match(externalUrlRegex) || [];
-
       for (const candidate of urls) {
         try {
           const parsedCandidate = new URL(candidate);
-
           if (
             !allowedHosts.has(
               parsedCandidate.hostname.toLowerCase(),
@@ -180,7 +156,6 @@ app.get("/api/resolve-apply", async (req, res) => {
         }
       }
     }
-
     /**
      * No external destination was discovered.
      * Keep Himalayas as the safe fallback.
@@ -200,7 +175,6 @@ app.get("/api/resolve-apply", async (req, res) => {
       },
       "Failed to resolve Himalayas application URL",
     );
-
     /**
      * The resolver must never break Job Matching.
      */
@@ -212,7 +186,5 @@ app.get("/api/resolve-apply", async (req, res) => {
     });
   }
 });
-
 app.use("/api", router);
-
 export default app;
