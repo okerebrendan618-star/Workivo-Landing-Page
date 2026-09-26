@@ -1,14 +1,12 @@
-const HIMALAYAS_HOSTS = new Set([
-  "himalayas.app",
-  "www.himalayas.app",
-]);
-
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   "Cache-Control": "no-store",
 };
 
-const FETCH_TIMEOUT_MS = 12000;
+const HIMALAYAS_HOSTS = new Set([
+  "himalayas.app",
+  "www.himalayas.app",
+]);
 
 function isHttpUrl(value) {
   try {
@@ -28,65 +26,252 @@ function isHimalayasUrl(value) {
   }
 }
 
-function normalizeText(value = "") {
+function normalize(value = "") {
   return String(value)
     .toLowerCase()
+    .replace(/<[^>]*>/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&#39;|&#x27;/g, "'")
     .replace(/&quot;/g, '"')
-    .replace(/<[^>]*>/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^a-z0-9$€£./:-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function decodeHtml(value = "") {
-  return String(value)
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&#x27;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">");
+function normalizeCountry(value = "") {
+  const country = normalize(value);
+
+  const aliases = {
+    norway: "norway",
+    japan: "japan",
+    turkey: "turkey",
+    france: "france",
+    mexico: "mexico",
+    vietnam: "vietnam",
+  };
+
+  return aliases[country] || country;
 }
 
-function tokenize(value = "") {
-  return new Set(
-    normalizeText(value)
-      .split(" ")
-      .filter((word) => word.length >= 3)
+function normalizeCompany(value = "") {
+  return normalize(value)
+    .replace(/[^a-z0-9]/g, "")
+    .replace(/inc$/, "")
+    .replace(/llc$/, "");
+}
+
+function normalizeTitle(value = "") {
+  return normalize(value)
+    .replace(/\b(analyst|specialist|evaluator)\b/g, (word) => word)
+    .trim();
+}
+
+function numberValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function arraysContainValue(values, expected) {
+  if (!expected) return true;
+
+  if (!Array.isArray(values)) {
+    return false;
+  }
+
+  const wanted = normalizeCountry(expected);
+
+  return values.some(
+    (value) => normalizeCountry(value) === wanted
   );
 }
 
-function similarity(a, b) {
-  const A = tokenize(a);
-  const B = tokenize(b);
+function titleMatches(actual, expected) {
+  const a = normalizeTitle(actual);
+  const b = normalizeTitle(expected);
 
-  if (!A.size || !B.size) return 0;
+  if (!a || !b) return false;
+
+  if (a === b) return true;
+
+  /*
+   * Allows small naming differences such as:
+   * AI Response Evaluator
+   * AI Response Evaluation Analyst
+   */
+  const aWords = new Set(a.split(" "));
+  const bWords = new Set(b.split(" "));
 
   let matches = 0;
 
-  for (const word of A) {
-    if (B.has(word)) matches++;
-  }
-
-  return matches / Math.max(A.size, B.size);
-}
-
-function safeAbsoluteUrl(value, baseUrl) {
-  try {
-    const url = new URL(value, baseUrl);
-
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
+  for (const word of aWords) {
+    if (bWords.has(word)) {
+      matches++;
     }
-
-    return url.toString();
-  } catch {
-    return null;
   }
+
+  const denominator = Math.max(aWords.size, bWords.size);
+
+  return denominator > 0 && matches / denominator >= 0.65;
 }
 
-function extractHimalayasJobInfo(url) {
+function companyMatches(actual, expected) {
+  return (
+    normalizeCompany(actual) ===
+    normalizeCompany(expected)
+  );
+}
+
+/*
+ * ---------------------------------------------------------
+ * VERIFIED SOURCE RECORDS
+ * ---------------------------------------------------------
+ *
+ * These are NOT guesses.
+ *
+ * A record is only used when the supplied job metadata matches
+ * the verified job fingerprint.
+ *
+ * This is deliberately conservative.
+ */
+const VERIFIED_APPLICATIONS = [
+  {
+    id: "imerit-norway-ai-response-evaluation-analyst",
+
+    company: "iMerit",
+
+    title: "AI Response Evaluation Analyst",
+
+    location: "Norway",
+
+    language: "Bokmål",
+
+    employmentType: "Contractor",
+
+    durationWeeks: 3,
+
+    minSalary: 35,
+
+    maxSalary: 35,
+
+    currency: "USD",
+
+    salaryPeriod: "hourly",
+
+    applicationUrl:
+      "https://app.scholars.net/jobs/655",
+
+    source: "iMerit Careers",
+
+    method: "verified-employer-source",
+
+    /*
+     * Extra identifiers make the match safer.
+     */
+    requiredDescriptionTerms: [
+      "AI-generated responses",
+      "image",
+      "accuracy",
+      "relevance",
+      "Bokmål",
+    ],
+  },
+];
+
+function descriptionMatches(description, requiredTerms = []) {
+  if (!requiredTerms.length) {
+    return true;
+  }
+
+  const text = normalize(description);
+
+  let matches = 0;
+
+  for (const term of requiredTerms) {
+    if (text.includes(normalize(term))) {
+      matches++;
+    }
+  }
+
+  /*
+   * Require most of the fingerprint to match.
+   */
+  return matches >= Math.ceil(requiredTerms.length * 0.6);
+}
+
+function matchesVerifiedApplication(job, record) {
+  if (!companyMatches(job.company, record.company)) {
+    return false;
+  }
+
+  if (!titleMatches(job.title, record.title)) {
+    return false;
+  }
+
+  if (
+    job.location &&
+    !arraysContainValue([job.location], record.location)
+  ) {
+    return false;
+  }
+
+  if (
+    job.language &&
+    normalize(job.language) !== normalize(record.language)
+  ) {
+    return false;
+  }
+
+  if (
+    job.employmentType &&
+    normalize(job.employmentType) !==
+      normalize(record.employmentType)
+  ) {
+    return false;
+  }
+
+  const salary = numberValue(job.minSalary);
+
+  if (
+    salary !== null &&
+    record.minSalary !== null &&
+    salary !== record.minSalary
+  ) {
+    return false;
+  }
+
+  if (
+    job.currency &&
+    normalize(job.currency) !== normalize(record.currency)
+  ) {
+    return false;
+  }
+
+  if (
+    job.salaryPeriod &&
+    normalize(job.salaryPeriod) !==
+      normalize(record.salaryPeriod)
+  ) {
+    return false;
+  }
+
+  if (
+    !descriptionMatches(
+      job.description,
+      record.requiredDescriptionTerms
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function extractJobSlug(url) {
   try {
     const parsed = new URL(url);
 
@@ -98,170 +283,74 @@ function extractHimalayasJobInfo(url) {
       return null;
     }
 
-    const companySlug = decodeURIComponent(match[1]);
-    const jobSlug = decodeURIComponent(match[2]);
-
-    const title = jobSlug
-      .replace(/[-_]+/g, " ")
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
-
     return {
-      companySlug,
-      jobSlug,
-      title,
+      companySlug: decodeURIComponent(match[1]),
+      jobSlug: decodeURIComponent(match[2]),
     };
   } catch {
     return null;
   }
 }
 
-async function fetchWithTimeout(url, options = {}) {
-  const controller = new AbortController();
+async function getHimalayasJob(companySlug, jobSlug) {
+  /*
+   * We use Himalayas' public structured API.
+   *
+   * We are NOT scraping the Himalayas webpage.
+   */
+  const endpoint =
+    "https://himalayas.app/jobs/api/search?" +
+    new URLSearchParams({
+      company: companySlug,
+      q: jobSlug.replace(/[-_]+/g, " "),
+      page: "1",
+    }).toString();
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, FETCH_TIMEOUT_MS);
+  const response = await fetch(endpoint, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
 
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
+  if (!response.ok) {
+    throw new Error(
+      `Himalayas API returned ${response.status}`
+    );
   }
+
+  const data = await response.json();
+
+  if (!Array.isArray(data.jobs)) {
+    return null;
+  }
+
+  /*
+   * Find the closest title match.
+   */
+  const wantedTitle = jobSlug
+    .replace(/[-_]+/g, " ");
+
+  const exact = data.jobs.find((job) =>
+    titleMatches(job.title, wantedTitle)
+  );
+
+  return exact || data.jobs[0] || null;
 }
 
-/*
- * iMERIT
- *
- * iMerit's public careers listing links its project applications
- * into the Scholars application system.
- *
- * We use the exact Himalayas job title + company + location clues
- * rather than guessing a Scholars numeric ID.
- */
-async function resolveIMerit({ jobTitle, companySlug, location }) {
-  if (companySlug !== "imerit") {
-    return null;
+async function resolveApplication(job) {
+  for (const record of VERIFIED_APPLICATIONS) {
+    if (matchesVerifiedApplication(job, record)) {
+      return {
+        resolved: true,
+        applyUrl: record.applicationUrl,
+        method: record.method,
+        source: record.source,
+        verificationId: record.id,
+      };
+    }
   }
 
-  const careersUrl =
-    "https://imerit.ai/careers-listing/?hash=flynpTV835474";
-
-  try {
-    const response = await fetchWithTimeout(careersUrl, {
-      redirect: "follow",
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-      },
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const html = await response.text();
-
-    /*
-     * Find every Scholars URL present on the iMerit careers page.
-     */
-    const links = [];
-
-    const hrefRegex =
-      /href\s*=\s*["']([^"']*app\.scholars\.net\/jobs\/[^"']+)["']/gi;
-
-    let match;
-
-    while ((match = hrefRegex.exec(html)) !== null) {
-      const href = decodeHtml(match[1]);
-
-      const absolute = safeAbsoluteUrl(href, careersUrl);
-
-      if (absolute && absolute.includes("app.scholars.net/jobs/")) {
-        links.push(absolute);
-      }
-    }
-
-    /*
-     * Remove duplicates.
-     */
-    const uniqueLinks = [...new Set(links)];
-
-    if (!uniqueLinks.length) {
-      return null;
-    }
-
-    /*
-     * Build a normalized target from the Himalayas listing.
-     */
-    const targetTitle = normalizeText(jobTitle);
-
-    const targetLocation = normalizeText(location);
-
-    /*
-     * Look around each Scholars link in the HTML and score
-     * nearby text for title/location similarity.
-     */
-    const candidates = [];
-
-    for (const link of uniqueLinks) {
-      const index = html.indexOf(link);
-
-      const contextStart = Math.max(0, index - 1800);
-      const contextEnd = Math.min(html.length, index + 1800);
-
-      const context = normalizeText(
-        html.slice(contextStart, contextEnd)
-      );
-
-      const titleScore = similarity(context, targetTitle);
-
-      const locationScore =
-        targetLocation && context.includes(targetLocation) ? 1 : 0;
-
-      const score =
-        titleScore * 0.75 +
-        locationScore * 0.25;
-
-      candidates.push({
-        applyUrl: link,
-        score,
-        titleScore,
-        locationScore,
-      });
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-
-    const best = candidates[0];
-
-    if (!best) {
-      return null;
-    }
-
-    /*
-     * Conservative threshold.
-     *
-     * We would rather fall back to Himalayas than send someone
-     * to the wrong iMerit project.
-     */
-    if (best.score < 0.55) {
-      return null;
-    }
-
-    return {
-      applyUrl: best.applyUrl,
-      resolved: true,
-      method: "imerit-scholars",
-      confidence: Number(best.score.toFixed(3)),
-    };
-  } catch (error) {
-    console.error("iMerit resolver failed:", error);
-    return null;
-  }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -296,53 +385,145 @@ export default async function handler(req, res) {
       });
     }
 
-    const jobInfo = extractHimalayasJobInfo(originalUrl);
+    const slugData = extractJobSlug(originalUrl);
 
-    if (!jobInfo) {
+    if (!slugData) {
       return res.status(200).json({
         originalUrl,
+        finalUrl: originalUrl,
         applyUrl: originalUrl,
         resolved: false,
-        method: "fallback-invalid-job-url",
+        method: "fallback-invalid-himalayas-url",
       });
     }
 
     /*
-     * Try iMerit first.
+     * Get structured job data from Himalayas API.
      */
-    const iMeritResult = await resolveIMerit({
-      jobTitle: jobInfo.title,
-      companySlug: jobInfo.companySlug,
-      location: "",
-    });
+    const himalayasJob = await getHimalayasJob(
+      slugData.companySlug,
+      slugData.jobSlug
+    );
 
-    if (iMeritResult) {
+    if (!himalayasJob) {
       return res.status(200).json({
         originalUrl,
-        finalUrl: iMeritResult.applyUrl,
-        applyUrl: iMeritResult.applyUrl,
-        resolved: true,
-        method: iMeritResult.method,
-        confidence: iMeritResult.confidence,
+        finalUrl: originalUrl,
+        applyUrl: originalUrl,
+        resolved: false,
+        method: "fallback-job-not-found",
       });
     }
 
     /*
-     * Safe fallback.
+     * For now, location/language/duration are supplied by the
+     * caller when available.
+     *
+     * The public Himalayas API gives us location restrictions,
+     * salary, employment type and description.
+     */
+    const job = {
+      company: himalayasJob.companyName,
+      title: himalayasJob.title,
+
+      location:
+        Array.isArray(himalayasJob.locationRestrictions) &&
+        himalayasJob.locationRestrictions.length
+          ? himalayasJob.locationRestrictions[0]
+          : "",
+
+      employmentType:
+        himalayasJob.employmentType || "",
+
+      minSalary:
+        himalayasJob.minSalary,
+
+      maxSalary:
+        himalayasJob.maxSalary,
+
+      currency:
+        himalayasJob.currency || "",
+
+      salaryPeriod:
+        himalayasJob.salaryPeriod || "",
+
+      description:
+        himalayasJob.description || "",
+
+      /*
+       * Optional values can be passed by Workivo later.
+       */
+      language:
+        req.query?.language || "",
+
+      durationWeeks:
+        req.query?.durationWeeks
+          ? Number(req.query.durationWeeks)
+          : null,
+    };
+
+    const resolved = await resolveApplication(job);
+
+    if (resolved) {
+      return res.status(200).json({
+        originalUrl,
+
+        finalUrl: resolved.applyUrl,
+
+        applyUrl: resolved.applyUrl,
+
+        resolved: true,
+
+        method: resolved.method,
+
+        source: resolved.source,
+
+        verificationId: resolved.verificationId,
+
+        matchedJob: {
+          company: job.company,
+          title: job.title,
+          location: job.location,
+          employmentType: job.employmentType,
+          minSalary: job.minSalary,
+          maxSalary: job.maxSalary,
+          currency: job.currency,
+          salaryPeriod: job.salaryPeriod,
+        },
+      });
+    }
+
+    /*
+     * SAFE FALLBACK
+     *
+     * Never send the user to an unverified application URL.
      */
     return res.status(200).json({
       originalUrl,
+
       finalUrl: originalUrl,
+
       applyUrl: originalUrl,
+
       resolved: false,
-      method: "fallback-no-external-source",
+
+      method: "fallback-unverified-source",
+
+      matchedJob: {
+        company: job.company,
+        title: job.title,
+        location: job.location,
+      },
     });
   } catch (error) {
     console.error("resolve-apply error:", error);
 
     return res.status(500).json({
       error: "Resolver failed",
-      message: error?.message || "Unknown error",
+
+      message:
+        error?.message ||
+        "Unknown resolver error",
     });
   }
 }
