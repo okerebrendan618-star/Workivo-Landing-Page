@@ -1255,73 +1255,237 @@ async function fetchHimalayasJob(
   originalUrl,
 ) {
   /*
-   * First use the public Himalayas API search endpoint.
+   * Himalayas job URLs normally look like:
    *
-   * The exact job URL is passed as the query so we can retrieve
-   * the job's structured fields instead of depending only on
-   * rendered HTML.
+   * https://himalayas.app/companies/{companySlug}/jobs/{jobSlug}
+   *
+   * We extract those structured values instead of sending the
+   * entire URL as the q= search term.
    */
-  const apiUrl =
-    `https://himalayas.app/jobs/api/search?page=1&q=${encodeURIComponent(originalUrl)}`;
 
-  const data =
-    await fetchJson(apiUrl);
+  let parsedUrl;
 
-  if (
-    data &&
-    Array.isArray(data.jobs) &&
-    data.jobs.length
-  ) {
-    /*
-     * Prefer an exact guid/applicationLink match.
-     */
-    const exact =
-      data.jobs.find(
-        (job) =>
-          job?.guid === originalUrl ||
-          job?.applicationLink === originalUrl,
-      );
-
-    const job =
-      exact || data.jobs[0];
-
-    return {
-      title:
-        typeof job.title === "string"
-          ? job.title
-          : "",
-
-      companyName:
-        typeof job.companyName === "string"
-          ? job.companyName
-          : "",
-
-      companySlug:
-        typeof job.companySlug === "string"
-          ? job.companySlug
-          : "",
-
-      description:
-        typeof job.description === "string"
-          ? job.description
-          : "",
-
-      locationRestrictions:
-        Array.isArray(
-          job.locationRestrictions,
-        )
-          ? job.locationRestrictions
-          : [],
-
-      applicationLink:
-        typeof job.applicationLink ===
-        "string"
-          ? job.applicationLink
-          : originalUrl,
-    };
+  try {
+    parsedUrl = new URL(originalUrl);
+  } catch {
+    return null;
   }
 
-  return null;
+  const pathParts =
+    parsedUrl.pathname
+      .split("/")
+      .filter(Boolean);
+
+  const companiesIndex =
+    pathParts.indexOf("companies");
+
+  const jobsIndex =
+    pathParts.indexOf("jobs");
+
+  if (
+    companiesIndex === -1 ||
+    jobsIndex === -1 ||
+    !pathParts[companiesIndex + 1] ||
+    !pathParts[jobsIndex + 1]
+  ) {
+    return null;
+  }
+
+  const companySlug =
+    decodeURIComponent(
+      pathParts[companiesIndex + 1],
+    );
+
+  const jobSlug =
+    decodeURIComponent(
+      pathParts[jobsIndex + 1],
+    );
+
+  /*
+   * Use the canonical company filter documented by
+   * Himalayas instead of searching for the entire URL.
+   */
+  const apiUrl =
+    new URL(
+      "https://himalayas.app/jobs/api/search",
+    );
+
+  apiUrl.searchParams.set(
+    "company",
+    companySlug,
+  );
+
+  apiUrl.searchParams.set(
+    "page",
+    "1",
+  );
+
+  /*
+   * Ask for the job title/slug as a free-text hint too.
+   * This is much more sensible than passing the complete URL.
+   */
+  const readableJobTitle =
+    jobSlug
+      .replace(/-/g, " ")
+      .trim();
+
+  if (readableJobTitle) {
+    apiUrl.searchParams.set(
+      "q",
+      readableJobTitle,
+    );
+  }
+
+  const data =
+    await fetchJson(
+      apiUrl.toString(),
+    );
+
+  if (
+    !data ||
+    !Array.isArray(data.jobs) ||
+    data.jobs.length === 0
+  ) {
+    /*
+     * Some searches may return no result when q is too
+     * restrictive. Retry using ONLY the company slug.
+     */
+    const companyOnlyUrl =
+      new URL(
+        "https://himalayas.app/jobs/api/search",
+      );
+
+    companyOnlyUrl.searchParams.set(
+      "company",
+      companySlug,
+    );
+
+    companyOnlyUrl.searchParams.set(
+      "page",
+      "1",
+    );
+
+    const companyData =
+      await fetchJson(
+        companyOnlyUrl.toString(),
+      );
+
+    if (
+      !companyData ||
+      !Array.isArray(
+        companyData.jobs,
+      ) ||
+      companyData.jobs.length === 0
+    ) {
+      return null;
+    }
+
+    data.jobs =
+      companyData.jobs;
+  }
+
+  /*
+   * Find the exact job using its URL slug first.
+   */
+  const normalizedJobSlug =
+    normalizeText(
+      jobSlug.replace(/-/g, " "),
+    );
+
+  let exactJob =
+    data.jobs.find((job) => {
+      const candidateTitle =
+        normalizeText(
+          job?.title || "",
+        );
+
+      return (
+        candidateTitle ===
+        normalizedJobSlug
+      );
+    });
+
+  /*
+   * If the title isn't an exact slug match, use the
+   * strongest title similarity.
+   */
+  if (!exactJob) {
+    let best = null;
+
+    for (
+      const job of data.jobs
+    ) {
+      const candidateTitle =
+        job?.title || "";
+
+      const score =
+        titleSimilarity(
+          normalizedJobSlug,
+          candidateTitle,
+        );
+
+      if (
+        !best ||
+        score > best.score
+      ) {
+        best = {
+          job,
+          score,
+        };
+      }
+    }
+
+    if (
+      best &&
+      best.score >= 0.65
+    ) {
+      exactJob =
+        best.job;
+    }
+  }
+
+  if (!exactJob) {
+    return null;
+  }
+
+  return {
+    title:
+      typeof exactJob.title ===
+      "string"
+        ? exactJob.title
+        : "",
+
+    companyName:
+      typeof exactJob.companyName ===
+      "string"
+        ? exactJob.companyName
+        : "",
+
+    companySlug:
+      typeof exactJob.companySlug ===
+      "string"
+        ? exactJob.companySlug
+        : companySlug,
+
+    description:
+      typeof exactJob.description ===
+      "string"
+        ? exactJob.description
+        : "",
+
+    locationRestrictions:
+      Array.isArray(
+        exactJob.locationRestrictions,
+      )
+        ? exactJob.locationRestrictions
+        : [],
+
+    applicationLink:
+      typeof exactJob.applicationLink ===
+      "string"
+        ? exactJob.applicationLink
+        : originalUrl,
+  };
 }
 
 /* ============================================================
