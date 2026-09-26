@@ -5,40 +5,15 @@ const HIMALAYAS_HOSTS = new Set([
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Cache-Control": "no-store",
 };
 
-const FETCH_TIMEOUT_MS = 7000;
-
-/*
- * ============================================================
- * RESPONSE HELPERS
- * ============================================================
- */
-
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: JSON_HEADERS,
-  });
-}
-
-/*
- * ============================================================
- * URL VALIDATION
- * ============================================================
- */
+const FETCH_TIMEOUT_MS = 12000;
 
 function isHttpUrl(value) {
   try {
     const url = new URL(value);
-
-    return (
-      url.protocol === "http:" ||
-      url.protocol === "https:"
-    );
+    return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
   }
@@ -47,651 +22,327 @@ function isHttpUrl(value) {
 function isHimalayasUrl(value) {
   try {
     const url = new URL(value);
-
-    return HIMALAYAS_HOSTS.has(
-      url.hostname.toLowerCase(),
-    );
+    return HIMALAYAS_HOSTS.has(url.hostname.toLowerCase());
   } catch {
     return false;
   }
 }
 
-function isExternalHttpUrl(value) {
-  if (!isHttpUrl(value)) {
-    return false;
-  }
-
-  try {
-    const hostname = new URL(value)
-      .hostname
-      .toLowerCase();
-
-    return !HIMALAYAS_HOSTS.has(hostname);
-  } catch {
-    return false;
-  }
-}
-
-/*
- * ============================================================
- * HTML HELPERS
- * ============================================================
- */
-
-function decodeHtmlEntities(value = "") {
+function normalizeText(value = "") {
   return String(value)
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&apos;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#x2F;/gi, "/")
-    .replace(/&#47;/gi, "/");
-}
-
-function stripHtml(value = "") {
-  return decodeHtmlEntities(String(value))
-    .replace(
-      /<script[\s\S]*?<\/script>/gi,
-      " ",
-    )
-    .replace(
-      /<style[\s\S]*?<\/style>/gi,
-      " ",
-    )
-    .replace(
-      /<[^>]+>/g,
-      " ",
-    )
+    .toLowerCase()
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;|&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/<[^>]*>/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-/*
- * ============================================================
- * FETCH WITH TIMEOUT
- * ============================================================
- */
-
-async function fetchWithTimeout(
-  url,
-  options = {},
-  timeoutMs = FETCH_TIMEOUT_MS,
-) {
-  const controller =
-    new AbortController();
-
-  const timeout =
-    setTimeout(() => {
-      controller.abort();
-    }, timeoutMs);
-
-  try {
-    return await fetch(url, {
-      ...options,
-      signal:
-        controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+function decodeHtml(value = "") {
+  return String(value)
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&#x27;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
 }
 
-async function fetchPage(url) {
+function tokenize(value = "") {
+  return new Set(
+    normalizeText(value)
+      .split(" ")
+      .filter((word) => word.length >= 3)
+  );
+}
+
+function similarity(a, b) {
+  const A = tokenize(a);
+  const B = tokenize(b);
+
+  if (!A.size || !B.size) return 0;
+
+  let matches = 0;
+
+  for (const word of A) {
+    if (B.has(word)) matches++;
+  }
+
+  return matches / Math.max(A.size, B.size);
+}
+
+function safeAbsoluteUrl(value, baseUrl) {
   try {
-    const response =
-      await fetchWithTimeout(
-        url,
-        {
-          method: "GET",
+    const url = new URL(value, baseUrl);
 
-          redirect: "follow",
-
-          headers: {
-            Accept:
-              "text/html,application/xhtml+xml",
-
-            "User-Agent":
-              "Mozilla/5.0 (compatible; Workivo Apply Resolver/3.0)",
-          },
-        },
-      );
-
-    if (!response.ok) {
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
       return null;
     }
 
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function extractHimalayasJobInfo(url) {
+  try {
+    const parsed = new URL(url);
+
+    const match = parsed.pathname.match(
+      /^\/companies\/([^/]+)\/jobs\/([^/]+)\/?$/i
+    );
+
+    if (!match) {
+      return null;
+    }
+
+    const companySlug = decodeURIComponent(match[1]);
+    const jobSlug = decodeURIComponent(match[2]);
+
+    const title = jobSlug
+      .replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
     return {
-      text:
-        await response.text(),
-
-      finalUrl:
-        response.url || url,
-
-      status:
-        response.status,
+      companySlug,
+      jobSlug,
+      title,
     };
   } catch {
     return null;
   }
 }
 
-/*
- * ============================================================
- * SAFE ABSOLUTE URL
- * ============================================================
- */
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
 
-function safeAbsoluteUrl(
-  value,
-  baseUrl,
-) {
-  if (!value) {
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, FETCH_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/*
+ * iMERIT
+ *
+ * iMerit's public careers listing links its project applications
+ * into the Scholars application system.
+ *
+ * We use the exact Himalayas job title + company + location clues
+ * rather than guessing a Scholars numeric ID.
+ */
+async function resolveIMerit({ jobTitle, companySlug, location }) {
+  if (companySlug !== "imerit") {
     return null;
   }
 
-  try {
-    const absolute =
-      new URL(
-        decodeHtmlEntities(
-          String(value).trim(),
-        ),
-        baseUrl,
-      );
+  const careersUrl =
+    "https://imerit.ai/careers-listing/?hash=flynpTV835474";
 
-    if (
-      !isHttpUrl(
-        absolute.toString(),
-      )
-    ) {
+  try {
+    const response = await fetchWithTimeout(careersUrl, {
+      redirect: "follow",
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+      },
+    });
+
+    if (!response.ok) {
       return null;
     }
 
-    return absolute.toString();
-  } catch {
-    return null;
-  }
-}
-
-/*
- * ============================================================
- * APPLICATION URL DETECTION
- * ============================================================
- *
- * We are NOT guessing the employer.
- *
- * We only inspect the actual Himalayas page that the user
- * is trying to apply through.
- * ============================================================
- */
-
-function looksLikeApplicationUrl(
-  value,
-) {
-  return /apply|application|careers|jobs|job-application|workday|greenhouse|lever|ashby|smartrecruiters|recruitee|workable/i.test(
-    value,
-  );
-}
-
-function looksLikeApplicationText(
-  value,
-) {
-  return /apply|application|careers/i.test(
-    value,
-  );
-}
-
-/*
- * ============================================================
- * EXTRACT EXTERNAL APPLICATION LINK
- * ============================================================
- */
-
-function extractExternalApplyUrl(
-  html,
-  baseUrl,
-) {
-  if (!html) {
-    return null;
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * 1. Inspect normal anchor tags.
-   * ----------------------------------------------------------
-   */
-
-  const anchorRegex =
-    /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while (
-    (match =
-      anchorRegex.exec(html)) !==
-    null
-  ) {
-    const rawHref =
-      match[1]?.trim();
-
-    const rawText =
-      match[2] || "";
-
-    if (!rawHref) {
-      continue;
-    }
-
-    const linkText =
-      stripHtml(rawText);
-
-    if (
-      !looksLikeApplicationText(
-        linkText,
-      )
-    ) {
-      continue;
-    }
-
-    const absoluteUrl =
-      safeAbsoluteUrl(
-        rawHref,
-        baseUrl,
-      );
-
-    if (
-      absoluteUrl &&
-      isExternalHttpUrl(
-        absoluteUrl,
-      )
-    ) {
-      return absoluteUrl;
-    }
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * 2. Look for explicit external URLs.
-   * ----------------------------------------------------------
-   */
-
-  const externalUrlRegex =
-    /https?:\/\/[^\s"'<>\\]+/gi;
-
-  const possibleUrls =
-    html.match(
-      externalUrlRegex,
-    ) || [];
-
-  for (
-    const rawCandidate of possibleUrls
-  ) {
-    const candidate =
-      decodeHtmlEntities(
-        rawCandidate
-          .replace(
-            /[),.;]+$/g,
-            "",
-          )
-          .trim(),
-      );
-
-    if (
-      !isExternalHttpUrl(
-        candidate,
-      )
-    ) {
-      continue;
-    }
-
-    if (
-      looksLikeApplicationUrl(
-        candidate,
-      )
-    ) {
-      return candidate;
-    }
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * 3. Look specifically for common ATS/application hosts.
-   * ----------------------------------------------------------
-   *
-   * This does NOT search those platforms.
-   *
-   * It only recognizes a URL if that URL is actually present
-   * in the Himalayas page we fetched.
-   * ----------------------------------------------------------
-   */
-
-  const platformRegex =
-    /https?:\/\/[^\s"'<>\\]*(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|smartrecruiters\.com|recruitee\.com|workable\.com)[^\s"'<>\\]*/gi;
-
-  const platformMatches =
-    html.match(
-      platformRegex,
-    ) || [];
-
-  for (
-    const rawCandidate of platformMatches
-  ) {
-    const candidate =
-      decodeHtmlEntities(
-        rawCandidate
-          .replace(
-            /[),.;]+$/g,
-            "",
-          )
-          .trim(),
-      );
-
-    if (
-      isExternalHttpUrl(
-        candidate,
-      )
-    ) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-/*
- * ============================================================
- * MAIN HANDLER
- * ============================================================
- */
-
-export default {
-  async fetch(request) {
-    /*
-     * --------------------------------------------------------
-     * CORS PREFLIGHT
-     * --------------------------------------------------------
-     */
-
-    if (
-      request.method ===
-      "OPTIONS"
-    ) {
-      return new Response(null, {
-        status: 204,
-        headers:
-          JSON_HEADERS,
-      });
-    }
+    const html = await response.text();
 
     /*
-     * --------------------------------------------------------
-     * ONLY GET
-     * --------------------------------------------------------
+     * Find every Scholars URL present on the iMerit careers page.
      */
+    const links = [];
 
-    if (
-      request.method !==
-      "GET"
-    ) {
-      return jsonResponse(
-        {
-          error:
-            "Method not allowed.",
-        },
-        405,
-      );
-    }
+    const hrefRegex =
+      /href\s*=\s*["']([^"']*app\.scholars\.net\/jobs\/[^"']+)["']/gi;
 
-    const requestUrl =
-      new URL(
-        request.url,
-      );
+    let match;
 
-    /*
-     * --------------------------------------------------------
-     * GET THE EXACT URL SENT BY JOB MATCHING
-     * --------------------------------------------------------
-     */
+    while ((match = hrefRegex.exec(html)) !== null) {
+      const href = decodeHtml(match[1]);
 
-    const rawUrl =
-      requestUrl.searchParams.get(
-        "url",
-      );
+      const absolute = safeAbsoluteUrl(href, careersUrl);
 
-    if (
-      !rawUrl ||
-      !rawUrl.trim()
-    ) {
-      return jsonResponse(
-        {
-          error:
-            "Missing job URL.",
-        },
-        400,
-      );
-    }
-
-    /*
-     * --------------------------------------------------------
-     * PARSE URL
-     * --------------------------------------------------------
-     */
-
-    let jobUrl;
-
-    try {
-      jobUrl =
-        new URL(rawUrl);
-    } catch {
-      return jsonResponse(
-        {
-          error:
-            "Invalid job URL.",
-        },
-        400,
-      );
-    }
-
-    /*
-     * --------------------------------------------------------
-     * SECURITY
-     *
-     * Workivo only accepts Himalayas URLs.
-     *
-     * This prevents the endpoint from becoming a generic
-     * server-side URL proxy.
-     * --------------------------------------------------------
-     */
-
-    if (
-      !HIMALAYAS_HOSTS.has(
-        jobUrl.hostname.toLowerCase(),
-      )
-    ) {
-      return jsonResponse(
-        {
-          error:
-            "Only Himalayas job URLs can be resolved.",
-        },
-        400,
-      );
-    }
-
-    /*
-     * This is the EXACT URL supplied by Job Matching.
-     */
-
-    const originalUrl =
-      jobUrl.toString();
-
-    try {
-      /*
-       * ======================================================
-       * STEP 1
-       *
-       * Fetch the exact Himalayas URL.
-       *
-       * We allow normal HTTP redirects to happen.
-       * ======================================================
-       */
-
-      const page =
-        await fetchPage(
-          originalUrl,
-        );
-
-      /*
-       * ======================================================
-       * STEP 2
-       *
-       * If the URL itself redirects to another website,
-       * that external URL is the answer.
-       * ======================================================
-       */
-
-      if (page) {
-        const finalUrl =
-          page.finalUrl ||
-          originalUrl;
-
-        if (
-          isExternalHttpUrl(
-            finalUrl,
-          )
-        ) {
-          return jsonResponse({
-            originalUrl,
-
-            finalUrl,
-
-            applyUrl:
-              finalUrl,
-
-            resolved: true,
-
-            method:
-              "direct-redirect",
-          });
-        }
-
-        /*
-         * ====================================================
-         * STEP 3
-         *
-         * Inspect the actual Himalayas HTML for an external
-         * application link.
-         *
-         * IMPORTANT:
-         *
-         * We are NOT searching Google.
-         * We are NOT searching iMerit.
-         * We are NOT guessing Greenhouse/Lever/etc.
-         *
-         * We only accept an external URL if the actual job
-         * page contains it.
-         * ====================================================
-         */
-
-        const externalApplyUrl =
-          extractExternalApplyUrl(
-            page.text,
-            finalUrl,
-          );
-
-        if (
-          externalApplyUrl
-        ) {
-          return jsonResponse({
-            originalUrl,
-
-            finalUrl,
-
-            applyUrl:
-              externalApplyUrl,
-
-            resolved: true,
-
-            method:
-              "job-page-link",
-          });
-        }
-
-        /*
-         * ====================================================
-         * STEP 4
-         *
-         * No external destination was exposed in the HTML.
-         *
-         * Safely fall back to the exact URL that Job Matching
-         * originally gave us.
-         * ====================================================
-         */
-
-        return jsonResponse({
-          originalUrl,
-
-          finalUrl,
-
-          applyUrl:
-            originalUrl,
-
-          resolved: false,
-
-          method:
-            "himalayas-direct",
-        });
+      if (absolute && absolute.includes("app.scholars.net/jobs/")) {
+        links.push(absolute);
       }
+    }
 
-      /*
-       * ======================================================
-       * STEP 5
-       *
-       * If the page could not be fetched, do NOT guess.
-       *
-       * Give the user the original Job Matching URL.
-       * ======================================================
-       */
+    /*
+     * Remove duplicates.
+     */
+    const uniqueLinks = [...new Set(links)];
 
-      return jsonResponse({
-        originalUrl,
+    if (!uniqueLinks.length) {
+      return null;
+    }
 
-        finalUrl:
-          originalUrl,
+    /*
+     * Build a normalized target from the Himalayas listing.
+     */
+    const targetTitle = normalizeText(jobTitle);
 
-        applyUrl:
-          originalUrl,
+    const targetLocation = normalizeText(location);
 
-        resolved: false,
+    /*
+     * Look around each Scholars link in the HTML and score
+     * nearby text for title/location similarity.
+     */
+    const candidates = [];
 
-        method:
-          "fallback-fetch-failed",
-      });
-    } catch (error) {
-      /*
-       * ======================================================
-       * FINAL FAILSAFE
-       * ======================================================
-       */
+    for (const link of uniqueLinks) {
+      const index = html.indexOf(link);
 
-      console.error(
-        "WORKIVO APPLY RESOLVER ERROR:",
-        error,
+      const contextStart = Math.max(0, index - 1800);
+      const contextEnd = Math.min(html.length, index + 1800);
+
+      const context = normalizeText(
+        html.slice(contextStart, contextEnd)
       );
 
-      return jsonResponse({
-        originalUrl,
+      const titleScore = similarity(context, targetTitle);
 
-        finalUrl:
-          originalUrl,
+      const locationScore =
+        targetLocation && context.includes(targetLocation) ? 1 : 0;
 
-        applyUrl:
-          originalUrl,
+      const score =
+        titleScore * 0.75 +
+        locationScore * 0.25;
 
-        resolved: false,
-
-        method:
-          "fallback-error",
+      candidates.push({
+        applyUrl: link,
+        score,
+        titleScore,
+        locationScore,
       });
     }
-  },
-};
+
+    candidates.sort((a, b) => b.score - a.score);
+
+    const best = candidates[0];
+
+    if (!best) {
+      return null;
+    }
+
+    /*
+     * Conservative threshold.
+     *
+     * We would rather fall back to Himalayas than send someone
+     * to the wrong iMerit project.
+     */
+    if (best.score < 0.55) {
+      return null;
+    }
+
+    return {
+      applyUrl: best.applyUrl,
+      resolved: true,
+      method: "imerit-scholars",
+      confidence: Number(best.score.toFixed(3)),
+    };
+  } catch (error) {
+    console.error("iMerit resolver failed:", error);
+    return null;
+  }
+}
+
+export default async function handler(req, res) {
+  if (req.method === "OPTIONS") {
+    return res.status(200).json({});
+  }
+
+  if (req.method !== "GET") {
+    return res.status(405).json({
+      error: "Method not allowed",
+    });
+  }
+
+  try {
+    const originalUrl = req.query?.url;
+
+    if (!originalUrl) {
+      return res.status(400).json({
+        error: "Missing url parameter",
+      });
+    }
+
+    if (!isHttpUrl(originalUrl)) {
+      return res.status(400).json({
+        error: "Invalid URL",
+      });
+    }
+
+    if (!isHimalayasUrl(originalUrl)) {
+      return res.status(400).json({
+        error: "Only Himalayas URLs are supported",
+      });
+    }
+
+    const jobInfo = extractHimalayasJobInfo(originalUrl);
+
+    if (!jobInfo) {
+      return res.status(200).json({
+        originalUrl,
+        applyUrl: originalUrl,
+        resolved: false,
+        method: "fallback-invalid-job-url",
+      });
+    }
+
+    /*
+     * Try iMerit first.
+     */
+    const iMeritResult = await resolveIMerit({
+      jobTitle: jobInfo.title,
+      companySlug: jobInfo.companySlug,
+      location: "",
+    });
+
+    if (iMeritResult) {
+      return res.status(200).json({
+        originalUrl,
+        finalUrl: iMeritResult.applyUrl,
+        applyUrl: iMeritResult.applyUrl,
+        resolved: true,
+        method: iMeritResult.method,
+        confidence: iMeritResult.confidence,
+      });
+    }
+
+    /*
+     * Safe fallback.
+     */
+    return res.status(200).json({
+      originalUrl,
+      finalUrl: originalUrl,
+      applyUrl: originalUrl,
+      resolved: false,
+      method: "fallback-no-external-source",
+    });
+  } catch (error) {
+    console.error("resolve-apply error:", error);
+
+    return res.status(500).json({
+      error: "Resolver failed",
+      message: error?.message || "Unknown error",
+    });
+  }
+}
