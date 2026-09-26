@@ -13,57 +13,10 @@ const JSON_HEADERS = {
 const FETCH_TIMEOUT_MS = 7000;
 
 /*
- * ------------------------------------------------------------
- * VERIFIED SOURCE CONFIGURATION
- * ------------------------------------------------------------
- *
- * These are public job-posting sources that can be checked
- * without exposing API keys or credentials.
- *
- * We intentionally DO NOT scrape random websites or blindly
- * trust search-engine results.
- * ------------------------------------------------------------
+ * ============================================================
+ * RESPONSE HELPERS
+ * ============================================================
  */
-
-const ATS_HOSTS = new Set([
-  "boards.greenhouse.io",
-  "job-boards.greenhouse.io",
-  "jobs.lever.co",
-  "jobs.ashbyhq.com",
-  "apply.workable.com",
-  "recruitee.com",
-]);
-
-/*
- * ------------------------------------------------------------
- * VERIFIED SCHOLARS SOURCE
- * ------------------------------------------------------------
- *
- * This is intentionally a small verified mapping.
- *
- * It is NOT a fake universal Scholars API.
- *
- * We only use it when the company/title match this exact
- * verified job that we have already confirmed.
- * ------------------------------------------------------------
- */
-
-const VERIFIED_EXTERNAL_JOBS = [
-  {
-    company: "imerit",
-    titlePatterns: [
-      "ai response evaluator",
-      "ai response evaluation analyst",
-      "ai response evaluator analyst",
-    ],
-    applyUrl: "https://app.scholars.net/jobs/656",
-    method: "scholars-verified",
-  },
-];
-
-/* ============================================================
-   BASIC RESPONSE HELPERS
-   ============================================================ */
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -71,6 +24,12 @@ function jsonResponse(data, status = 200) {
     headers: JSON_HEADERS,
   });
 }
+
+/*
+ * ============================================================
+ * URL VALIDATION
+ * ============================================================
+ */
 
 function isHttpUrl(value) {
   try {
@@ -113,9 +72,11 @@ function isExternalHttpUrl(value) {
   }
 }
 
-/* ============================================================
-   STRING NORMALIZATION
-   ============================================================ */
+/*
+ * ============================================================
+ * HTML HELPERS
+ * ============================================================
+ */
 
 function decodeHtmlEntities(value = "") {
   return String(value)
@@ -131,134 +92,119 @@ function decodeHtmlEntities(value = "") {
 
 function stripHtml(value = "") {
   return decodeHtmlEntities(String(value))
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeText(value = "") {
-  return stripHtml(String(value))
-    .toLowerCase()
-    .replace(/&[^;\s]+;/g, " ")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeCompany(value = "") {
-  return normalizeText(value)
     .replace(
-      /\b(incorporated|inc|llc|ltd|limited|corp|corporation|company|co)\b/g,
+      /<script[\s\S]*?<\/script>/gi,
+      " ",
+    )
+    .replace(
+      /<style[\s\S]*?<\/style>/gi,
+      " ",
+    )
+    .replace(
+      /<[^>]+>/g,
       " ",
     )
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function slugify(value = "") {
-  return normalizeText(value)
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+/*
+ * ============================================================
+ * FETCH WITH TIMEOUT
+ * ============================================================
+ */
 
-function getTokens(value = "") {
-  return new Set(
-    normalizeText(value)
-      .split(" ")
-      .filter(
-        (token) =>
-          token.length >= 2 &&
-          ![
-            "the",
-            "and",
-            "for",
-            "with",
-            "from",
-            "into",
-            "your",
-            "our",
-            "you",
-            "job",
-            "role",
-          ].includes(token),
-      ),
-  );
-}
+async function fetchWithTimeout(
+  url,
+  options = {},
+  timeoutMs = FETCH_TIMEOUT_MS,
+) {
+  const controller =
+    new AbortController();
 
-function tokenOverlap(a, b) {
-  const first = getTokens(a);
-  const second = getTokens(b);
+  const timeout =
+    setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
 
-  if (!first.size || !second.size) {
-    return 0;
+  try {
+    return await fetch(url, {
+      ...options,
+      signal:
+        controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
   }
+}
 
-  let matches = 0;
+async function fetchPage(url) {
+  try {
+    const response =
+      await fetchWithTimeout(
+        url,
+        {
+          method: "GET",
 
-  for (const token of first) {
-    if (second.has(token)) {
-      matches += 1;
+          redirect: "follow",
+
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml",
+
+            "User-Agent":
+              "Mozilla/5.0 (compatible; Workivo Apply Resolver/3.0)",
+          },
+        },
+      );
+
+    if (!response.ok) {
+      return null;
     }
-  }
 
-  return matches / Math.max(first.size, second.size);
+    return {
+      text:
+        await response.text(),
+
+      finalUrl:
+        response.url || url,
+
+      status:
+        response.status,
+    };
+  } catch {
+    return null;
+  }
 }
 
-function titleSimilarity(a, b) {
-  const first = normalizeText(a);
-  const second = normalizeText(b);
+/*
+ * ============================================================
+ * SAFE ABSOLUTE URL
+ * ============================================================
+ */
 
-  if (!first || !second) {
-    return 0;
-  }
-
-  if (first === second) {
-    return 1;
-  }
-
-  if (
-    first.includes(second) ||
-    second.includes(first)
-  ) {
-    return 0.92;
-  }
-
-  return tokenOverlap(first, second);
-}
-
-function descriptionSimilarity(candidateDescription, sourceDescription) {
-  if (
-    !candidateDescription ||
-    !sourceDescription
-  ) {
-    return 0;
-  }
-
-  return tokenOverlap(
-    candidateDescription,
-    sourceDescription,
-  );
-}
-
-/* ============================================================
-   SAFE URL HELPERS
-   ============================================================ */
-
-function safeAbsoluteUrl(value, baseUrl) {
+function safeAbsoluteUrl(
+  value,
+  baseUrl,
+) {
   if (!value) {
     return null;
   }
 
   try {
-    const absolute = new URL(
-      decodeHtmlEntities(String(value).trim()),
-      baseUrl,
-    );
+    const absolute =
+      new URL(
+        decodeHtmlEntities(
+          String(value).trim(),
+        ),
+        baseUrl,
+      );
 
-    if (!isHttpUrl(absolute.toString())) {
+    if (
+      !isHttpUrl(
+        absolute.toString(),
+      )
+    ) {
       return null;
     }
 
@@ -268,112 +214,39 @@ function safeAbsoluteUrl(value, baseUrl) {
   }
 }
 
-function hostnameMatches(url, hosts) {
-  try {
-    const hostname = new URL(url)
-      .hostname
-      .toLowerCase();
+/*
+ * ============================================================
+ * APPLICATION URL DETECTION
+ * ============================================================
+ *
+ * We are NOT guessing the employer.
+ *
+ * We only inspect the actual Himalayas page that the user
+ * is trying to apply through.
+ * ============================================================
+ */
 
-    return hosts.has(hostname);
-  } catch {
-    return false;
-  }
-}
-
-/* ============================================================
-   FETCH HELPERS
-   ============================================================ */
-
-async function fetchWithTimeout(
-  url,
-  options = {},
-  timeoutMs = FETCH_TIMEOUT_MS,
+function looksLikeApplicationUrl(
+  value,
 ) {
-  const controller = new AbortController();
-
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function fetchJson(url, options = {}) {
-  try {
-    const response = await fetchWithTimeout(
-      url,
-      {
-        ...options,
-        headers: {
-          Accept: "application/json",
-          "User-Agent":
-            "Workivo Apply Resolver/2.0",
-          ...(options.headers || {}),
-        },
-      },
-    );
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
-
-async function fetchText(url, options = {}) {
-  try {
-    const response = await fetchWithTimeout(
-      url,
-      {
-        ...options,
-        headers: {
-          Accept:
-            "text/html,application/xhtml+xml",
-          "User-Agent":
-            "Mozilla/5.0 (compatible; Workivo Apply Resolver/2.0)",
-          ...(options.headers || {}),
-        },
-      },
-    );
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return {
-      text: await response.text(),
-      finalUrl: response.url || url,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/* ============================================================
-   HIMALAYAS HTML LINK EXTRACTION
-   ============================================================ */
-
-function looksLikeApplicationUrl(value) {
   return /apply|application|careers|jobs|job-application|workday|greenhouse|lever|ashby|smartrecruiters|recruitee|workable/i.test(
     value,
   );
 }
 
-function looksLikeApplicationText(value) {
-  return /apply|application|careers|job|jobs/i.test(
+function looksLikeApplicationText(
+  value,
+) {
+  return /apply|application|careers/i.test(
     value,
   );
 }
+
+/*
+ * ============================================================
+ * EXTRACT EXTERNAL APPLICATION LINK
+ * ============================================================
+ */
 
 function extractExternalApplyUrl(
   html,
@@ -384,15 +257,20 @@ function extractExternalApplyUrl(
   }
 
   /*
-   * First inspect normal anchor tags.
+   * ----------------------------------------------------------
+   * 1. Inspect normal anchor tags.
+   * ----------------------------------------------------------
    */
+
   const anchorRegex =
     /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
   let match;
 
   while (
-    (match = anchorRegex.exec(html)) !== null
+    (match =
+      anchorRegex.exec(html)) !==
+    null
   ) {
     const rawHref =
       match[1]?.trim();
@@ -404,9 +282,14 @@ function extractExternalApplyUrl(
       continue;
     }
 
-    const linkText = stripHtml(rawText);
+    const linkText =
+      stripHtml(rawText);
 
-    if (!looksLikeApplicationText(linkText)) {
+    if (
+      !looksLikeApplicationText(
+        linkText,
+      )
+    ) {
       continue;
     }
 
@@ -418,20 +301,27 @@ function extractExternalApplyUrl(
 
     if (
       absoluteUrl &&
-      isExternalHttpUrl(absoluteUrl)
+      isExternalHttpUrl(
+        absoluteUrl,
+      )
     ) {
       return absoluteUrl;
     }
   }
 
   /*
-   * Then inspect explicit URLs.
+   * ----------------------------------------------------------
+   * 2. Look for explicit external URLs.
+   * ----------------------------------------------------------
    */
+
   const externalUrlRegex =
     /https?:\/\/[^\s"'<>\\]+/gi;
 
   const possibleUrls =
-    html.match(externalUrlRegex) || [];
+    html.match(
+      externalUrlRegex,
+    ) || [];
 
   for (
     const rawCandidate of possibleUrls
@@ -439,31 +329,49 @@ function extractExternalApplyUrl(
     const candidate =
       decodeHtmlEntities(
         rawCandidate
-          .replace(/[),.;]+$/g, "")
+          .replace(
+            /[),.;]+$/g,
+            "",
+          )
           .trim(),
       );
 
     if (
-      !isExternalHttpUrl(candidate)
+      !isExternalHttpUrl(
+        candidate,
+      )
     ) {
       continue;
     }
 
     if (
-      looksLikeApplicationUrl(candidate)
+      looksLikeApplicationUrl(
+        candidate,
+      )
     ) {
       return candidate;
     }
   }
 
   /*
-   * Finally inspect common ATS domains specifically.
+   * ----------------------------------------------------------
+   * 3. Look specifically for common ATS/application hosts.
+   * ----------------------------------------------------------
+   *
+   * This does NOT search those platforms.
+   *
+   * It only recognizes a URL if that URL is actually present
+   * in the Himalayas page we fetched.
+   * ----------------------------------------------------------
    */
+
   const platformRegex =
     /https?:\/\/[^\s"'<>\\]*(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|smartrecruiters\.com|recruitee\.com|workable\.com)[^\s"'<>\\]*/gi;
 
   const platformMatches =
-    html.match(platformRegex) || [];
+    html.match(
+      platformRegex,
+    ) || [];
 
   for (
     const rawCandidate of platformMatches
@@ -471,12 +379,17 @@ function extractExternalApplyUrl(
     const candidate =
       decodeHtmlEntities(
         rawCandidate
-          .replace(/[),.;]+$/g, "")
+          .replace(
+            /[),.;]+$/g,
+            "",
+          )
           .trim(),
       );
 
     if (
-      isExternalHttpUrl(candidate)
+      isExternalHttpUrl(
+        candidate,
+      )
     ) {
       return candidate;
     }
@@ -485,1012 +398,11 @@ function extractExternalApplyUrl(
   return null;
 }
 
-/* ============================================================
-   VERIFIED STATIC SOURCES
-   ============================================================ */
-
-function resolveVerifiedExternalJob(
-  companyName,
-  title,
-) {
-  const normalizedCompany =
-    normalizeCompany(companyName);
-
-  const normalizedTitle =
-    normalizeText(title);
-
-  for (
-    const source of VERIFIED_EXTERNAL_JOBS
-  ) {
-    if (
-      normalizeCompany(source.company) !==
-      normalizedCompany
-    ) {
-      continue;
-    }
-
-    const titleMatches =
-      source.titlePatterns.some(
-        (pattern) => {
-          const normalizedPattern =
-            normalizeText(pattern);
-
-          return (
-            normalizedTitle ===
-              normalizedPattern ||
-            normalizedTitle.includes(
-              normalizedPattern,
-            ) ||
-            normalizedPattern.includes(
-              normalizedTitle,
-            )
-          );
-        },
-      );
-
-    if (titleMatches) {
-      return {
-        applyUrl: source.applyUrl,
-        method: source.method,
-        score: 1,
-      };
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   GREENHOUSE
-   ============================================================ */
-
-async function searchGreenhouse(
-  companySlug,
-  title,
-  description,
-) {
-  const candidates = [
-    slugify(companySlug),
-  ].filter(Boolean);
-
-  for (
-    const boardToken of candidates
-  ) {
-    const url =
-      `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(boardToken)}/jobs?content=true`;
-
-    const data =
-      await fetchJson(url);
-
-    if (
-      !data ||
-      !Array.isArray(data.jobs)
-    ) {
-      continue;
-    }
-
-    let best = null;
-
-    for (
-      const job of data.jobs
-    ) {
-      const sourceTitle =
-        job.title || "";
-
-      const titleScore =
-        titleSimilarity(
-          title,
-          sourceTitle,
-        );
-
-      if (titleScore < 0.68) {
-        continue;
-      }
-
-      const sourceDescription =
-        job.content || "";
-
-      const descriptionScore =
-        descriptionSimilarity(
-          description,
-          sourceDescription,
-        );
-
-      const score =
-        titleScore * 0.75 +
-        descriptionScore * 0.25;
-
-      if (
-        !best ||
-        score > best.score
-      ) {
-        best = {
-          score,
-          titleScore,
-          url:
-            job.absolute_url ||
-            `https://boards.greenhouse.io/${encodeURIComponent(boardToken)}/jobs/${job.id}`,
-          method:
-            "greenhouse",
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.70
-    ) {
-      return best;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   LEVER
-   ============================================================ */
-
-async function searchLever(
-  companySlug,
-  title,
-  description,
-) {
-  const siteCandidates = [
-    slugify(companySlug),
-  ].filter(Boolean);
-
-  for (
-    const site of siteCandidates
-  ) {
-    const url =
-      `https://api.lever.co/v0/postings/${encodeURIComponent(site)}?mode=json`;
-
-    const data =
-      await fetchJson(url);
-
-    if (!Array.isArray(data)) {
-      continue;
-    }
-
-    let best = null;
-
-    for (
-      const job of data
-    ) {
-      const sourceTitle =
-        job.text ||
-        job.title ||
-        "";
-
-      const titleScore =
-        titleSimilarity(
-          title,
-          sourceTitle,
-        );
-
-      if (titleScore < 0.68) {
-        continue;
-      }
-
-      const sourceDescription =
-        job.descriptionPlain ||
-        job.description ||
-        "";
-
-      const descriptionScore =
-        descriptionSimilarity(
-          description,
-          sourceDescription,
-        );
-
-      const score =
-        titleScore * 0.75 +
-        descriptionScore * 0.25;
-
-      const applyUrl =
-        job.applyUrl ||
-        job.hostedUrl ||
-        job.url;
-
-      if (
-        !applyUrl ||
-        !isExternalHttpUrl(applyUrl)
-      ) {
-        continue;
-      }
-
-      if (
-        !best ||
-        score > best.score
-      ) {
-        best = {
-          score,
-          titleScore,
-          url: applyUrl,
-          method: "lever",
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.70
-    ) {
-      return best;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   ASHBY
-   ============================================================ */
-
-async function searchAshby(
-  companySlug,
-  title,
-  description,
-) {
-  const boardCandidates = [
-    slugify(companySlug),
-  ].filter(Boolean);
-
-  for (
-    const boardName of boardCandidates
-  ) {
-    const url =
-      `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(boardName)}`;
-
-    const data =
-      await fetchJson(url);
-
-    if (
-      !data ||
-      !Array.isArray(data.jobs)
-    ) {
-      continue;
-    }
-
-    let best = null;
-
-    for (
-      const job of data.jobs
-    ) {
-      const sourceTitle =
-        job.title || "";
-
-      const titleScore =
-        titleSimilarity(
-          title,
-          sourceTitle,
-        );
-
-      if (titleScore < 0.68) {
-        continue;
-      }
-
-      const sourceDescription =
-        job.description ||
-        job.descriptionHtml ||
-        "";
-
-      const descriptionScore =
-        descriptionSimilarity(
-          description,
-          sourceDescription,
-        );
-
-      const score =
-        titleScore * 0.75 +
-        descriptionScore * 0.25;
-
-      const applyUrl =
-        job.applyUrl ||
-        job.jobUrl ||
-        job.url;
-
-      if (
-        !applyUrl ||
-        !isExternalHttpUrl(applyUrl)
-      ) {
-        continue;
-      }
-
-      if (
-        !best ||
-        score > best.score
-      ) {
-        best = {
-          score,
-          titleScore,
-          url: applyUrl,
-          method: "ashby",
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.70
-    ) {
-      return best;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   SMARTRECRUITERS
-   ============================================================ */
-
-async function searchSmartRecruiters(
-  companySlug,
-  title,
-) {
-  const companyCandidates = [
-    slugify(companySlug),
-  ].filter(Boolean);
-
-  for (
-    const companyIdentifier of companyCandidates
-  ) {
-    const query =
-      encodeURIComponent(title);
-
-    const url =
-      `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(companyIdentifier)}/postings?q=${query}&limit=100`;
-
-    const data =
-      await fetchJson(url);
-
-    if (
-      !data ||
-      !Array.isArray(data.content)
-    ) {
-      continue;
-    }
-
-    let best = null;
-
-    for (
-      const job of data.content
-    ) {
-      const sourceTitle =
-        job.name || "";
-
-      const titleScore =
-        titleSimilarity(
-          title,
-          sourceTitle,
-        );
-
-      if (titleScore < 0.72) {
-        continue;
-      }
-
-      /*
-       * SmartRecruiters provides a ref to the detailed
-       * posting. Fetch it so we can obtain applyUrl.
-       */
-      let details = null;
-
-      if (job.ref) {
-        details =
-          await fetchJson(job.ref);
-      }
-
-      const applyUrl =
-        details?.applyUrl ||
-        details?.postingUrl ||
-        job.ref;
-
-      if (
-        !applyUrl ||
-        !isExternalHttpUrl(applyUrl)
-      ) {
-        continue;
-      }
-
-      if (
-        !best ||
-        titleScore > best.score
-      ) {
-        best = {
-          score: titleScore,
-          titleScore,
-          url: applyUrl,
-          method:
-            "smartrecruiters",
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.72
-    ) {
-      return best;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   RECRUITEE
-   ============================================================ */
-
-async function searchRecruitee(
-  companySlug,
-  title,
-  description,
-) {
-  const slugCandidates = [
-    slugify(companySlug),
-  ].filter(Boolean);
-
-  for (
-    const company of slugCandidates
-  ) {
-    const apiUrl =
-      `https://${encodeURIComponent(company)}.recruitee.com/api/offers/`;
-
-    const data =
-      await fetchJson(apiUrl);
-
-    if (
-      !data ||
-      !Array.isArray(data.offers)
-    ) {
-      continue;
-    }
-
-    let best = null;
-
-    for (
-      const job of data.offers
-    ) {
-      const sourceTitle =
-        job.title || "";
-
-      const titleScore =
-        titleSimilarity(
-          title,
-          sourceTitle,
-        );
-
-      if (titleScore < 0.68) {
-        continue;
-      }
-
-      const sourceDescription =
-        job.description ||
-        job.description_html ||
-        "";
-
-      const descriptionScore =
-        descriptionSimilarity(
-          description,
-          sourceDescription,
-        );
-
-      const score =
-        titleScore * 0.75 +
-        descriptionScore * 0.25;
-
-      const applyUrl =
-        job.careers_url ||
-        job.url ||
-        job.apply_url;
-
-      if (
-        !applyUrl ||
-        !isExternalHttpUrl(applyUrl)
-      ) {
-        continue;
-      }
-
-      if (
-        !best ||
-        score > best.score
-      ) {
-        best = {
-          score,
-          titleScore,
-          url: applyUrl,
-          method: "recruitee",
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.70
-    ) {
-      return best;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   WORKABLE
-   ============================================================ */
-
-function extractWorkableJobs(
-  html,
-  baseUrl,
-) {
-  const results = [];
-
-  if (!html) {
-    return results;
-  }
-
-  const anchorRegex =
-    /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-
-  while (
-    (match = anchorRegex.exec(html)) !== null
-  ) {
-    const href =
-      safeAbsoluteUrl(
-        match[1],
-        baseUrl,
-      );
-
-    const text =
-      stripHtml(match[2]);
-
-    if (!href || !text) {
-      continue;
-    }
-
-    if (
-      /\/j\/|\/jobs\/|job/i.test(
-        href,
-      )
-    ) {
-      results.push({
-        url: href,
-        title: text,
-      });
-    }
-  }
-
-  return results;
-}
-
-async function searchWorkable(
-  companySlug,
-  title,
-) {
-  const companyCandidates = [
-    slugify(companySlug),
-  ].filter(Boolean);
-
-  for (
-    const company of companyCandidates
-  ) {
-    const url =
-      `https://apply.workable.com/${encodeURIComponent(company)}/`;
-
-    const result =
-      await fetchText(url);
-
-    if (!result) {
-      continue;
-    }
-
-    const jobs =
-      extractWorkableJobs(
-        result.text,
-        result.finalUrl || url,
-      );
-
-    let best = null;
-
-    for (
-      const job of jobs
-    ) {
-      const score =
-        titleSimilarity(
-          title,
-          job.title,
-        );
-
-      if (
-        score < 0.72
-      ) {
-        continue;
-      }
-
-      if (
-        !best ||
-        score > best.score
-      ) {
-        best = {
-          score,
-          titleScore: score,
-          url: job.url,
-          method: "workable",
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.72
-    ) {
-      return best;
-    }
-  }
-
-  return null;
-}
-
-/* ============================================================
-   PROVIDER SEARCH
-   ============================================================ */
-
-async function discoverExternalApplication({
-  companyName,
-  companySlug,
-  title,
-  description,
-}) {
-  /*
-   * 1. First check manually verified sources.
-   *
-   * This is the highest-confidence path.
-   */
-  const verified =
-    resolveVerifiedExternalJob(
-      companyName,
-      title,
-    );
-
-  if (verified) {
-    return verified;
-  }
-
-  /*
-   * 2. Query public ATS/job-board sources.
-   *
-   * We run these independently so one provider failing does
-   * not break the entire resolver.
-   */
-  const results =
-    await Promise.allSettled([
-      searchGreenhouse(
-        companySlug,
-        title,
-        description,
-      ),
-
-      searchLever(
-        companySlug,
-        title,
-        description,
-      ),
-
-      searchAshby(
-        companySlug,
-        title,
-        description,
-      ),
-
-      searchSmartRecruiters(
-        companySlug,
-        title,
-      ),
-
-      searchRecruitee(
-        companySlug,
-        title,
-        description,
-      ),
-
-      searchWorkable(
-        companySlug,
-        title,
-      ),
-    ]);
-
-  const successful =
-    results
-      .filter(
-        (result) =>
-          result.status ===
-            "fulfilled" &&
-          result.value,
-      )
-      .map(
-        (result) =>
-          result.value,
-      );
-
-  if (!successful.length) {
-    return null;
-  }
-
-  /*
-   * Choose the strongest verified provider match.
-   */
-  successful.sort(
-    (a, b) =>
-      Number(b.score || 0) -
-      Number(a.score || 0),
-  );
-
-  const best =
-    successful[0];
-
-  /*
-   * Conservative threshold.
-   *
-   * We would rather fall back to Himalayas than send a user
-   * to the wrong company's job.
-   */
-  if (
-    Number(best.score || 0) < 0.70
-  ) {
-    return null;
-  }
-
-  return best;
-}
-
-/* ============================================================
-   HIMALAYAS JOB DATA
-   ============================================================ */
-
-async function fetchHimalayasJob(
-  originalUrl,
-) {
-  /*
-   * Himalayas job URLs normally look like:
-   *
-   * https://himalayas.app/companies/{companySlug}/jobs/{jobSlug}
-   *
-   * We extract those structured values instead of sending the
-   * entire URL as the q= search term.
-   */
-
-  let parsedUrl;
-
-  try {
-    parsedUrl = new URL(originalUrl);
-  } catch {
-    return null;
-  }
-
-  const pathParts =
-    parsedUrl.pathname
-      .split("/")
-      .filter(Boolean);
-
-  const companiesIndex =
-    pathParts.indexOf("companies");
-
-  const jobsIndex =
-    pathParts.indexOf("jobs");
-
-  if (
-    companiesIndex === -1 ||
-    jobsIndex === -1 ||
-    !pathParts[companiesIndex + 1] ||
-    !pathParts[jobsIndex + 1]
-  ) {
-    return null;
-  }
-
-  const companySlug =
-    decodeURIComponent(
-      pathParts[companiesIndex + 1],
-    );
-
-  const jobSlug =
-    decodeURIComponent(
-      pathParts[jobsIndex + 1],
-    );
-
-  /*
-   * Use the canonical company filter documented by
-   * Himalayas instead of searching for the entire URL.
-   */
-  const apiUrl =
-    new URL(
-      "https://himalayas.app/jobs/api/search",
-    );
-
-  apiUrl.searchParams.set(
-    "company",
-    companySlug,
-  );
-
-  apiUrl.searchParams.set(
-    "page",
-    "1",
-  );
-
-  /*
-   * Ask for the job title/slug as a free-text hint too.
-   * This is much more sensible than passing the complete URL.
-   */
-  const readableJobTitle =
-    jobSlug
-      .replace(/-/g, " ")
-      .trim();
-
-  if (readableJobTitle) {
-    apiUrl.searchParams.set(
-      "q",
-      readableJobTitle,
-    );
-  }
-
-  const data =
-    await fetchJson(
-      apiUrl.toString(),
-    );
-
-  if (
-    !data ||
-    !Array.isArray(data.jobs) ||
-    data.jobs.length === 0
-  ) {
-    /*
-     * Some searches may return no result when q is too
-     * restrictive. Retry using ONLY the company slug.
-     */
-    const companyOnlyUrl =
-      new URL(
-        "https://himalayas.app/jobs/api/search",
-      );
-
-    companyOnlyUrl.searchParams.set(
-      "company",
-      companySlug,
-    );
-
-    companyOnlyUrl.searchParams.set(
-      "page",
-      "1",
-    );
-
-    const companyData =
-      await fetchJson(
-        companyOnlyUrl.toString(),
-      );
-
-    if (
-      !companyData ||
-      !Array.isArray(
-        companyData.jobs,
-      ) ||
-      companyData.jobs.length === 0
-    ) {
-      return null;
-    }
-
-    data.jobs =
-      companyData.jobs;
-  }
-
-  /*
-   * Find the exact job using its URL slug first.
-   */
-  const normalizedJobSlug =
-    normalizeText(
-      jobSlug.replace(/-/g, " "),
-    );
-
-  let exactJob =
-    data.jobs.find((job) => {
-      const candidateTitle =
-        normalizeText(
-          job?.title || "",
-        );
-
-      return (
-        candidateTitle ===
-        normalizedJobSlug
-      );
-    });
-
-  /*
-   * If the title isn't an exact slug match, use the
-   * strongest title similarity.
-   */
-  if (!exactJob) {
-    let best = null;
-
-    for (
-      const job of data.jobs
-    ) {
-      const candidateTitle =
-        job?.title || "";
-
-      const score =
-        titleSimilarity(
-          normalizedJobSlug,
-          candidateTitle,
-        );
-
-      if (
-        !best ||
-        score > best.score
-      ) {
-        best = {
-          job,
-          score,
-        };
-      }
-    }
-
-    if (
-      best &&
-      best.score >= 0.65
-    ) {
-      exactJob =
-        best.job;
-    }
-  }
-
-  if (!exactJob) {
-    return null;
-  }
-
-  return {
-    title:
-      typeof exactJob.title ===
-      "string"
-        ? exactJob.title
-        : "",
-
-    companyName:
-      typeof exactJob.companyName ===
-      "string"
-        ? exactJob.companyName
-        : "",
-
-    companySlug:
-      typeof exactJob.companySlug ===
-      "string"
-        ? exactJob.companySlug
-        : companySlug,
-
-    description:
-      typeof exactJob.description ===
-      "string"
-        ? exactJob.description
-        : "",
-
-    locationRestrictions:
-      Array.isArray(
-        exactJob.locationRestrictions,
-      )
-        ? exactJob.locationRestrictions
-        : [],
-
-    applicationLink:
-      typeof exactJob.applicationLink ===
-      "string"
-        ? exactJob.applicationLink
-        : originalUrl,
-  };
-}
-
-/* ============================================================
-   MAIN REQUEST HANDLER
-   ============================================================ */
+/*
+ * ============================================================
+ * MAIN HANDLER
+ * ============================================================
+ */
 
 export default {
   async fetch(request) {
@@ -1499,10 +411,15 @@ export default {
      * CORS PREFLIGHT
      * --------------------------------------------------------
      */
-    if (request.method === "OPTIONS") {
+
+    if (
+      request.method ===
+      "OPTIONS"
+    ) {
       return new Response(null, {
         status: 204,
-        headers: JSON_HEADERS,
+        headers:
+          JSON_HEADERS,
       });
     }
 
@@ -1511,7 +428,11 @@ export default {
      * ONLY GET
      * --------------------------------------------------------
      */
-    if (request.method !== "GET") {
+
+    if (
+      request.method !==
+      "GET"
+    ) {
       return jsonResponse(
         {
           error:
@@ -1522,18 +443,21 @@ export default {
     }
 
     const requestUrl =
-      new URL(request.url);
+      new URL(
+        request.url,
+      );
+
+    /*
+     * --------------------------------------------------------
+     * GET THE EXACT URL SENT BY JOB MATCHING
+     * --------------------------------------------------------
+     */
 
     const rawUrl =
       requestUrl.searchParams.get(
         "url",
       );
 
-    /*
-     * --------------------------------------------------------
-     * REQUIRE URL
-     * --------------------------------------------------------
-     */
     if (
       !rawUrl ||
       !rawUrl.trim()
@@ -1547,10 +471,17 @@ export default {
       );
     }
 
+    /*
+     * --------------------------------------------------------
+     * PARSE URL
+     * --------------------------------------------------------
+     */
+
     let jobUrl;
 
     try {
-      jobUrl = new URL(rawUrl);
+      jobUrl =
+        new URL(rawUrl);
     } catch {
       return jsonResponse(
         {
@@ -1565,12 +496,13 @@ export default {
      * --------------------------------------------------------
      * SECURITY
      *
-     * The endpoint only accepts Himalayas URLs.
+     * Workivo only accepts Himalayas URLs.
      *
-     * This prevents someone from turning the endpoint into a
-     * generic server-side URL fetcher.
+     * This prevents the endpoint from becoming a generic
+     * server-side URL proxy.
      * --------------------------------------------------------
      */
+
     if (
       !HIMALAYAS_HOSTS.has(
         jobUrl.hostname.toLowerCase(),
@@ -1585,31 +517,41 @@ export default {
       );
     }
 
+    /*
+     * This is the EXACT URL supplied by Job Matching.
+     */
+
     const originalUrl =
       jobUrl.toString();
 
     try {
       /*
-       * ------------------------------------------------------
-       * STEP 1 — DIRECT HIMALAYAS PAGE FETCH
-       * ------------------------------------------------------
+       * ======================================================
+       * STEP 1
+       *
+       * Fetch the exact Himalayas URL.
+       *
+       * We allow normal HTTP redirects to happen.
+       * ======================================================
        */
-      const pageResult =
-        await fetchText(
+
+      const page =
+        await fetchPage(
           originalUrl,
         );
 
       /*
-       * ------------------------------------------------------
-       * STEP 2 — REDIRECT CHECK
+       * ======================================================
+       * STEP 2
        *
-       * Sometimes the employer URL may already be the final
-       * destination.
-       * ------------------------------------------------------
+       * If the URL itself redirects to another website,
+       * that external URL is the answer.
+       * ======================================================
        */
-      if (pageResult) {
+
+      if (page) {
         const finalUrl =
-          pageResult.finalUrl ||
+          page.finalUrl ||
           originalUrl;
 
         if (
@@ -1619,159 +561,118 @@ export default {
         ) {
           return jsonResponse({
             originalUrl,
+
             finalUrl,
-            applyUrl: finalUrl,
+
+            applyUrl:
+              finalUrl,
+
             resolved: true,
+
             method:
-              "redirect",
+              "direct-redirect",
           });
         }
 
         /*
-         * ----------------------------------------------------
-         * STEP 3 — OLD HTML EXTRACTION
+         * ====================================================
+         * STEP 3
          *
-         * Keep the original resolver behavior as a fallback
-         * because some future Himalayas jobs may contain a
-         * direct employer link in their HTML.
-         * ----------------------------------------------------
+         * Inspect the actual Himalayas HTML for an external
+         * application link.
+         *
+         * IMPORTANT:
+         *
+         * We are NOT searching Google.
+         * We are NOT searching iMerit.
+         * We are NOT guessing Greenhouse/Lever/etc.
+         *
+         * We only accept an external URL if the actual job
+         * page contains it.
+         * ====================================================
          */
-        const htmlApplyUrl =
+
+        const externalApplyUrl =
           extractExternalApplyUrl(
-            pageResult.text,
+            page.text,
             finalUrl,
           );
 
-        if (htmlApplyUrl) {
+        if (
+          externalApplyUrl
+        ) {
           return jsonResponse({
             originalUrl,
+
             finalUrl,
+
             applyUrl:
-              htmlApplyUrl,
+              externalApplyUrl,
+
             resolved: true,
+
             method:
-              "html-link",
+              "job-page-link",
           });
         }
-      }
 
-      /*
-       * ------------------------------------------------------
-       * STEP 4 — STRUCTURED HIMALAYAS JOB DATA
-       * ------------------------------------------------------
-       */
-      const job =
-        await fetchHimalayasJob(
-          originalUrl,
-        );
+        /*
+         * ====================================================
+         * STEP 4
+         *
+         * No external destination was exposed in the HTML.
+         *
+         * Safely fall back to the exact URL that Job Matching
+         * originally gave us.
+         * ====================================================
+         */
 
-      /*
-       * If structured data isn't available, we safely fall
-       * back rather than guessing.
-       */
-      if (!job) {
-        return jsonResponse({
-          originalUrl,
-          finalUrl:
-            pageResult?.finalUrl ||
-            originalUrl,
-          applyUrl: originalUrl,
-          resolved: false,
-          method:
-            "fallback-no-job-data",
-        });
-      }
-
-      /*
-       * ------------------------------------------------------
-       * STEP 5 — VERIFIED EXTERNAL DISCOVERY
-       * ------------------------------------------------------
-       */
-      const external =
-        await discoverExternalApplication({
-          companyName:
-            job.companyName,
-
-          companySlug:
-            job.companySlug,
-
-          title:
-            job.title,
-
-          description:
-            job.description,
-        });
-
-      /*
-       * ------------------------------------------------------
-       * STEP 6 — CONFIDENT EXTERNAL MATCH
-       * ------------------------------------------------------
-       */
-      if (
-        external &&
-        external.url &&
-        isExternalHttpUrl(
-          external.url,
-        )
-      ) {
         return jsonResponse({
           originalUrl,
 
-          finalUrl:
-            pageResult?.finalUrl ||
-            originalUrl,
+          finalUrl,
 
           applyUrl:
-            external.url,
+            originalUrl,
 
-          resolved: true,
+          resolved: false,
 
           method:
-            external.method ||
-            "external-provider",
-
-          providerScore:
-            Number(
-              external.score || 0,
-            ),
+            "himalayas-direct",
         });
       }
 
       /*
-       * ------------------------------------------------------
-       * STEP 7 — SAFE FALLBACK
-       * ------------------------------------------------------
+       * ======================================================
+       * STEP 5
        *
-       * We NEVER guess.
+       * If the page could not be fetched, do NOT guess.
        *
-       * If no trusted source is found, the user goes to the
-       * original Himalayas job.
-       * ------------------------------------------------------
+       * Give the user the original Job Matching URL.
+       * ======================================================
        */
+
       return jsonResponse({
         originalUrl,
 
         finalUrl:
-          pageResult?.finalUrl ||
           originalUrl,
 
-        applyUrl: originalUrl,
+        applyUrl:
+          originalUrl,
 
         resolved: false,
 
         method:
-          "fallback",
+          "fallback-fetch-failed",
       });
     } catch (error) {
       /*
-       * ------------------------------------------------------
+       * ======================================================
        * FINAL FAILSAFE
-       * ------------------------------------------------------
-       *
-       * Apply should never completely break because the
-       * resolver experienced an error.
-       * ------------------------------------------------------
+       * ======================================================
        */
+
       console.error(
         "WORKIVO APPLY RESOLVER ERROR:",
         error,
