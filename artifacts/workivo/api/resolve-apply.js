@@ -17,11 +17,17 @@ const HIMALAYAS_HOSTS = new Set([
  *
  * Himalayas URL
  *      ↓
+ * Extract company + requested job title from URL
+ *      ↓
  * Himalayas structured API
  *      ↓
- * Get canonical job data
+ * Get canonical job metadata
  *      ↓
- * Identify company + job
+ * Keep BOTH:
+ *
+ *   requestedTitle
+ *   Himalayas API title
+ *
  *      ↓
  * Try public ATS providers
  *      ↓
@@ -32,7 +38,7 @@ const HIMALAYAS_HOSTS = new Set([
  * Workable
  * Recruitee
  *      ↓
- * Strong job match?
+ * Strong verified match?
  *      ↓
  * YES → external application URL
  * NO  → Himalayas fallback
@@ -40,8 +46,6 @@ const HIMALAYAS_HOSTS = new Set([
  * IMPORTANT:
  *
  * This resolver NEVER invents an application URL.
- *
- * If a provider cannot be verified, it is skipped.
  *
  * =========================================================
  */
@@ -150,6 +154,32 @@ function slugify(value = "") {
     .replace(/&/g, "and")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+
+/*
+ * =========================================================
+ * REQUESTED TITLE FROM HIMALAYAS SLUG
+ * =========================================================
+ *
+ * Example:
+ *
+ * ai-product-manager-5205658339
+ *
+ * becomes:
+ *
+ * AI Product Manager
+ *
+ * The numeric suffix is treated as a job identifier,
+ * NOT part of the title.
+ * =========================================================
+ */
+
+function titleFromJobSlug(jobSlug = "") {
+  return String(jobSlug || "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+\d{5,}$/g, "")
+    .trim();
 }
 
 
@@ -514,6 +544,13 @@ function extractHimalayasJob(
         decodeURIComponent(
           match[2]
         ),
+
+      requestedTitle:
+        titleFromJobSlug(
+          decodeURIComponent(
+            match[2]
+          )
+        ),
     };
   } catch {
     return null;
@@ -526,27 +563,31 @@ function extractHimalayasJob(
  * HIMALAYAS STRUCTURED API
  * =========================================================
  *
- * IMPORTANT CHANGE:
+ * IMPORTANT:
  *
- * Himalayas now recommends cursor pagination.
+ * We DO NOT return a fuzzy match immediately.
  *
- * A company can have more than 20 jobs.
+ * That was the bug causing:
  *
- * Example:
+ * AI Product Manager
  *
- * YipitData → 64 jobs
+ * to incorrectly become:
  *
- * The API returns only 20 jobs per request.
+ * Data Product Manager
  *
- * We therefore continue using nextCursor until:
+ * because both contain:
  *
- * 1. The requested job is found
- * 2. There is no nextCursor
- * 3. A safety page limit is reached
+ * product + manager
  *
- * This prevents valid jobs from being incorrectly
- * classified as "himalayas-job-not-found".
+ * Instead:
  *
+ * 1. Search all available company pages.
+ * 2. Immediately return ONLY an exact title match.
+ * 3. Keep the strongest fuzzy candidate in memory.
+ * 4. Continue pagination.
+ * 5. Only use fuzzy matching after pagination finishes.
+ *
+ * This protects against a wrong early-page match.
  * =========================================================
  */
 
@@ -554,78 +595,39 @@ async function getHimalayasJob(
   companySlug,
   jobSlug
 ) {
-  /*
-   * Convert the URL slug into the likely title.
-   *
-   * Example:
-   *
-   * ai-product-manager-5205658339
-   *
-   * becomes:
-   *
-   * ai product manager
-   *
-   * The trailing numeric ID is NOT part of the title.
-   */
-
   const titleQuery =
-    String(jobSlug || "")
-      .replace(/[-_]+/g, " ")
-      .replace(/\s+\d{5,}$/g, "")
-      .trim();
+    titleFromJobSlug(
+      jobSlug
+    );
 
   const normalizedTargetTitle =
     normalizeTitle(
       titleQuery
     );
 
-  /*
-   * Himalayas currently returns 20 jobs per page.
-   *
-   * Eight pages is a safety limit.
-   *
-   * This is enough for normal company feeds while
-   * preventing an accidental infinite pagination loop.
-   */
-
   const MAX_PAGES = 8;
 
   let cursor = null;
 
-  /*
-   * Keep track of cursors we have already used.
-   *
-   * If the API ever accidentally gives us the same cursor,
-   * we stop safely instead of looping forever.
-   */
+  const seenCursors =
+    new Set();
 
-  const seenCursors = new Set();
+  let globalBest = null;
+  let globalBestScore = 0;
 
   for (
     let page = 0;
     page < MAX_PAGES;
     page++
   ) {
-    /*
-     * Build the company feed request.
-     *
-     * We intentionally use the company filter instead of
-     * relying on q=title because the title query can fail
-     * when the Himalayas slug contains a numeric job ID.
-     */
-
     const params =
       new URLSearchParams({
         company:
           companySlug,
 
-        page:
-          "1",
+        limit:
+          "20",
       });
-
-    /*
-     * Cursor is only added after the first page.
-     */
 
     if (cursor) {
       params.set(
@@ -637,10 +639,6 @@ async function getHimalayasJob(
     const endpoint =
       "https://himalayas.app/jobs/api/search?" +
       params.toString();
-
-    /*
-     * Keep the Himalayas request bounded.
-     */
 
     const result =
       await fetchJson(
@@ -664,14 +662,18 @@ async function getHimalayasJob(
 
     /*
      * =====================================================
-     * 1. EXACT TITLE MATCH
+     * EXACT TITLE MATCH
      * =====================================================
      *
-     * This should catch:
+     * Exact matches are returned immediately.
      *
-     * "Software Engineer, Benchmarking"
+     * Example:
      *
-     * against the corresponding URL slug.
+     * target:
+     * AI Product Manager
+     *
+     * job:
+     * AI Product Manager
      */
 
     const exact =
@@ -689,14 +691,15 @@ async function getHimalayasJob(
 
     /*
      * =====================================================
-     * 2. STRONG TITLE MATCH
+     * FUZZY MATCH
      * =====================================================
      *
-     * We calculate the strongest candidate on this page.
+     * We ONLY record the candidate.
+     *
+     * We DO NOT return it yet.
+     *
+     * This is the critical fix.
      */
-
-    let best = null;
-    let bestScore = 0;
 
     for (const job of jobs) {
       const score =
@@ -706,48 +709,28 @@ async function getHimalayasJob(
         );
 
       if (
-        score > bestScore
+        score >
+        globalBestScore
       ) {
-        bestScore = score;
-        best = job;
+        globalBestScore =
+          score;
+
+        globalBest = job;
       }
     }
 
     /*
-     * A strong title match is sufficient.
-     */
-
-    if (
-      best &&
-      bestScore >= 0.65
-    ) {
-      return best;
-    }
-
-    /*
      * =====================================================
-     * 3. CURSOR PAGINATION
+     * NEXT CURSOR
      * =====================================================
-     *
-     * If the job wasn't on this page, ask Himalayas for
-     * the next page using nextCursor.
      */
 
     const nextCursor =
       result.data.nextCursor;
 
-    /*
-     * No next page means the job genuinely wasn't found
-     * in the company's public feed.
-     */
-
     if (!nextCursor) {
       break;
     }
-
-    /*
-     * Protect against an API returning the same cursor.
-     */
 
     if (
       seenCursors.has(
@@ -766,8 +749,19 @@ async function getHimalayasJob(
   }
 
   /*
-   * The job was not found after all available/safe pages.
+   * =====================================================
+   * FINAL FUZZY FALLBACK
+   * =====================================================
+   *
+   * Only after pagination has finished.
    */
+
+  if (
+    globalBest &&
+    globalBestScore >= 0.65
+  ) {
+    return globalBest;
+  }
 
   return null;
 }
@@ -848,6 +842,29 @@ function companyIdentifiers(
  * =========================================================
  * PROVIDER MATCH SCORING
  * =========================================================
+ *
+ * IMPORTANT TITLE FIX:
+ *
+ * The resolver can now have:
+ *
+ * sourceJob.requestedTitle
+ *
+ * AND
+ *
+ * sourceJob.title
+ *
+ * We compare the provider job against BOTH.
+ *
+ * This matters when Himalayas has:
+ *
+ * Data Product Manager
+ *
+ * while the actual source URL says:
+ *
+ * AI Product Manager
+ *
+ * The strongest title match wins.
+ * =========================================================
  */
 
 function scoreProviderJob(
@@ -855,11 +872,36 @@ function scoreProviderJob(
   providerJob,
   identifierConfidence = 1
 ) {
-  const titleScore =
-    titleSimilarity(
-      sourceJob.title,
-      providerJob.title
-    );
+  const titleCandidates = [
+    sourceJob.requestedTitle,
+    sourceJob.title,
+  ]
+    .filter(Boolean);
+
+  let titleScore = 0;
+  let matchedTitle = "";
+
+  for (
+    const titleCandidate
+    of titleCandidates
+  ) {
+    const candidateScore =
+      titleSimilarity(
+        titleCandidate,
+        providerJob.title
+      );
+
+    if (
+      candidateScore >
+      titleScore
+    ) {
+      titleScore =
+        candidateScore;
+
+      matchedTitle =
+        titleCandidate;
+    }
+  }
 
   if (titleScore < 0.78) {
     return {
@@ -868,6 +910,7 @@ function scoreProviderJob(
       locationScore: 0,
       descriptionScore: 0,
       salaryScore: 0,
+      matchedTitle,
     };
   }
 
@@ -895,6 +938,7 @@ function scoreProviderJob(
       locationScore: 0,
       descriptionScore: 0,
       salaryScore: 0,
+      matchedTitle,
     };
   }
 
@@ -938,6 +982,7 @@ function scoreProviderJob(
     locationScore,
     descriptionScore,
     salaryScore,
+    matchedTitle,
   };
 }
 
@@ -979,7 +1024,10 @@ async function resolveGreenhouse(
 
         let best = null;
 
-        for (const job of result.data.jobs) {
+        for (
+          const job
+          of result.data.jobs
+        ) {
           const candidate = {
             title:
               job.title || "",
@@ -1088,11 +1136,16 @@ async function resolveLever(
 ) {
   const attempts = [];
 
-  for (const identifier of identifiers) {
-    for (const base of [
-      "https://api.lever.co/v0/postings",
-      "https://api.eu.lever.co/v0/postings",
-    ]) {
+  for (
+    const identifier
+    of identifiers
+  ) {
+    for (
+      const base of [
+        "https://api.lever.co/v0/postings",
+        "https://api.eu.lever.co/v0/postings",
+      ]
+    ) {
       attempts.push(
         (async () => {
           const url =
@@ -1118,7 +1171,10 @@ async function resolveLever(
 
           let best = null;
 
-          for (const job of result.data) {
+          for (
+            const job
+            of result.data
+          ) {
             const categories =
               job.categories || {};
 
@@ -1275,7 +1331,10 @@ async function resolveAshby(
 
         let best = null;
 
-        for (const job of result.data.jobs) {
+        for (
+          const job
+          of result.data.jobs
+        ) {
           const locations = [
             job.location || "",
             ...(Array.isArray(
@@ -1411,7 +1470,8 @@ async function resolveSmartRecruiters(
           `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
             identifier
           )}/postings?limit=100&q=${encodeURIComponent(
-            sourceJob.title
+            sourceJob.requestedTitle ||
+              sourceJob.title
           )}`;
 
         const listResult =
@@ -1626,7 +1686,10 @@ async function resolveWorkable(
 
         let best = null;
 
-        for (const job of jobs) {
+        for (
+          const job
+          of jobs
+        ) {
           const location =
             job.location
               ?.location_str ||
@@ -1789,7 +1852,10 @@ async function resolveRecruitee(
 
         let best = null;
 
-        for (const offer of offers) {
+        for (
+          const offer
+          of offers
+        ) {
           if (
             offer.status &&
             normalize(
@@ -2109,8 +2175,6 @@ export default async function handler(
     /*
      * =====================================================
      * HIMALAYAS LOOKUP
-     *
-     * NOW USES CURSOR PAGINATION.
      * =====================================================
      */
 
@@ -2143,9 +2207,27 @@ export default async function handler(
 
           jobSlug:
             slugData.jobSlug,
+
+          requestedTitle:
+            slugData.requestedTitle,
         }
       );
     }
+
+    /*
+     * =====================================================
+     * BUILD SOURCE JOB
+     * =====================================================
+     *
+     * IMPORTANT:
+     *
+     * requestedTitle comes from the original URL slug.
+     *
+     * title comes from Himalayas API.
+     *
+     * We preserve both.
+     * =====================================================
+     */
 
     const sourceJob = {
       company:
@@ -2157,6 +2239,14 @@ export default async function handler(
         req.query?.title ||
         himalayasJob.title ||
         "",
+
+      requestedTitle:
+        slugData.requestedTitle ||
+        "",
+
+      companySlug:
+        himalayasJob.companySlug ||
+        slugData.companySlug,
 
       description:
         himalayasJob.description ||
@@ -2201,8 +2291,7 @@ export default async function handler(
     const resolved =
       await resolveUniversal(
         sourceJob,
-        himalayasJob.companySlug ||
-          slugData.companySlug
+        sourceJob.companySlug
       );
 
     if (
@@ -2318,6 +2407,9 @@ export default async function handler(
 
           title:
             sourceJob.title,
+
+          requestedTitle:
+            sourceJob.requestedTitle,
 
           employmentType:
             sourceJob.employmentType,
