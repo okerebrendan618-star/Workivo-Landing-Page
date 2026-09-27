@@ -13,23 +13,15 @@ const HIMALAYAS_HOSTS = new Set([
  * WORKIVO UNIVERSAL APPLICATION RESOLVER
  * =========================================================
  *
- * FLOW
+ * PURPOSE
  *
- * Himalayas URL
+ * Himalayas job URL
  *      ↓
- * Extract company + requested job title from URL
+ * Robust Himalayas source-job discovery
  *      ↓
- * Himalayas structured API
+ * Preserve URL-derived title + API title
  *      ↓
- * Get canonical job metadata
- *      ↓
- * Keep BOTH:
- *
- *   requestedTitle
- *   Himalayas API title
- *
- *      ↓
- * Try public ATS providers
+ * Public ATS discovery
  *      ↓
  * Greenhouse
  * Lever
@@ -40,15 +32,36 @@ const HIMALAYAS_HOSTS = new Set([
  *      ↓
  * Strong verified match?
  *      ↓
- * YES → external application URL
- * NO  → Himalayas fallback
+ * YES → direct application URL
+ * NO  → original Himalayas URL
  *
- * IMPORTANT:
+ * IMPORTANT
  *
- * This resolver NEVER invents an application URL.
+ * No company-specific job IDs.
+ * No company-specific application URLs.
+ * No hardcoded employer mappings.
+ * No invented URLs.
  *
  * =========================================================
  */
+
+
+/*
+ * =========================================================
+ * CONFIGURATION
+ * =========================================================
+ *
+ * These are generic safety/performance limits.
+ * They are NOT company-specific hardcodes.
+ * =========================================================
+ */
+
+const HIMALAYAS_TITLE_SEARCH_MAX_PAGES = 20;
+const HIMALAYAS_COMPANY_SEARCH_MAX_PAGES = 20;
+
+const PROVIDER_MATCH_THRESHOLD = 0.78;
+
+const FETCH_TIMEOUT_MS = 5000;
 
 
 /*
@@ -162,16 +175,18 @@ function slugify(value = "") {
  * REQUESTED TITLE FROM HIMALAYAS SLUG
  * =========================================================
  *
- * Example:
+ * Examples:
  *
  * ai-product-manager-5205658339
+ *      ↓
+ * ai product manager
  *
- * becomes:
+ * senior-ai-engineer
+ *      ↓
+ * senior ai engineer
  *
- * AI Product Manager
- *
- * The numeric suffix is treated as a job identifier,
- * NOT part of the title.
+ * Numeric suffixes with 5+ digits are treated as listing
+ * identifiers rather than title text.
  * =========================================================
  */
 
@@ -291,6 +306,62 @@ function titleSimilarity(a, b) {
 
 /*
  * =========================================================
+ * JOB SLUG SIMILARITY
+ * =========================================================
+ *
+ * Used only as a secondary signal.
+ *
+ * This helps distinguish records when Himalayas has multiple
+ * jobs with identical or very similar titles.
+ * =========================================================
+ */
+
+function jobSlugSimilarity(
+  requestedJobSlug = "",
+  job = {}
+) {
+  const requested =
+    slugify(
+      String(requestedJobSlug)
+        .replace(
+          /\d{5,}$/g,
+          ""
+        )
+    );
+
+  const candidates = [
+    job.slug,
+    job.jobSlug,
+    job.guid,
+    job.applicationLink,
+  ]
+    .filter(Boolean)
+    .map(slugify);
+
+  if (!requested || !candidates.length) {
+    return 0;
+  }
+
+  let best = 0;
+
+  for (const candidate of candidates) {
+    const score =
+      jaccardSimilarity(
+        requested,
+        candidate
+      );
+
+    if (score > best) {
+      best = score;
+    }
+  }
+
+  return best;
+}
+
+
+/*
+ * =========================================================
  * COUNTRY / LOCATION MATCHING
  * =========================================================
  */
@@ -402,16 +473,24 @@ function salaryMatches(
   }
 
   const sourceMin =
-    numberValue(sourceJob.minSalary);
+    numberValue(
+      sourceJob.minSalary
+    );
 
   const sourceMax =
-    numberValue(sourceJob.maxSalary);
+    numberValue(
+      sourceJob.maxSalary
+    );
 
   const providerMin =
-    numberValue(providerJob.minSalary);
+    numberValue(
+      providerJob.minSalary
+    );
 
   const providerMax =
-    numberValue(providerJob.maxSalary);
+    numberValue(
+      providerJob.maxSalary
+    );
 
   if (
     sourceMin === null ||
@@ -435,37 +514,42 @@ function salaryMatches(
 
 /*
  * =========================================================
- * FETCH WITH TIMEOUT
+ * FETCH HELPERS
  * =========================================================
  */
 
 async function fetchWithTimeout(
   url,
   options = {},
-  timeoutMs = 4500
+  timeoutMs = FETCH_TIMEOUT_MS
 ) {
   const controller =
     new AbortController();
 
-  const timer = setTimeout(
-    () => controller.abort(),
-    timeoutMs
-  );
+  const timer =
+    setTimeout(
+      () => controller.abort(),
+      timeoutMs
+    );
 
   try {
-    const response = await fetch(
-      url,
-      {
-        ...options,
-        signal:
-          controller.signal,
-        headers: {
-          Accept:
-            "application/json",
-          ...(options.headers || {}),
-        },
-      }
-    );
+    const response =
+      await fetch(
+        url,
+        {
+          ...options,
+
+          signal:
+            controller.signal,
+
+          headers: {
+            Accept:
+              "application/json",
+
+            ...(options.headers || {}),
+          },
+        }
+      );
 
     return response;
   } finally {
@@ -476,7 +560,7 @@ async function fetchWithTimeout(
 async function fetchJson(
   url,
   options = {},
-  timeoutMs = 4500
+  timeoutMs = FETCH_TIMEOUT_MS
 ) {
   try {
     const response =
@@ -534,22 +618,24 @@ function extractHimalayasJob(
       return null;
     }
 
-    return {
-      companySlug:
-        decodeURIComponent(
-          match[1]
-        ),
+    const companySlug =
+      decodeURIComponent(
+        match[1]
+      );
 
-      jobSlug:
-        decodeURIComponent(
-          match[2]
-        ),
+    const jobSlug =
+      decodeURIComponent(
+        match[2]
+      );
+
+    return {
+      companySlug,
+
+      jobSlug,
 
       requestedTitle:
         titleFromJobSlug(
-          decodeURIComponent(
-            match[2]
-          )
+          jobSlug
         ),
     };
   } catch {
@@ -560,34 +646,152 @@ function extractHimalayasJob(
 
 /*
  * =========================================================
- * HIMALAYAS STRUCTURED API
+ * HIMALAYAS JOB CANDIDATE SCORING
+ * =========================================================
+ */
+
+function scoreHimalayasCandidate(
+  job,
+  requestedTitle,
+  companySlug,
+  jobSlug
+) {
+  const titleScore =
+    titleSimilarity(
+      requestedTitle,
+      job.title || ""
+    );
+
+  const companyScore =
+    normalizeCompany(
+      job.companySlug || ""
+    ) ===
+    normalizeCompany(
+      companySlug || ""
+    )
+      ? 1
+      : jaccardSimilarity(
+          companySlug,
+          job.companySlug ||
+            job.companyName ||
+            ""
+        );
+
+  const slugScore =
+    jobSlugSimilarity(
+      jobSlug,
+      job
+    );
+
+  /*
+   * Exact title is the strongest source-job signal.
+   */
+
+  let score =
+    titleScore * 0.65 +
+    companyScore * 0.20 +
+    slugScore * 0.15;
+
+  if (
+    normalizeTitle(
+      job.title || ""
+    ) ===
+    normalizeTitle(
+      requestedTitle
+    )
+  ) {
+    score += 0.20;
+  }
+
+  return {
+    score: Math.min(score, 1),
+    titleScore,
+    companyScore,
+    slugScore,
+  };
+}
+
+
+/*
+ * =========================================================
+ * HIMALAYAS SEARCH PAGE
  * =========================================================
  *
  * IMPORTANT:
  *
- * We DO NOT return a fuzzy match immediately.
+ * /jobs/api/search uses PAGE pagination.
  *
- * That was the bug causing:
+ * We deliberately do NOT send cursor here.
+ * =========================================================
+ */
+
+async function searchHimalayasPage({
+  companySlug,
+  query,
+  page,
+  sort = "relevant",
+}) {
+  const params =
+    new URLSearchParams();
+
+  params.set(
+    "limit",
+    "20"
+  );
+
+  params.set(
+    "page",
+    String(page)
+  );
+
+  params.set(
+    "sort",
+    sort
+  );
+
+  if (companySlug) {
+    params.set(
+      "company",
+      companySlug
+    );
+  }
+
+  if (query) {
+    params.set(
+      "q",
+      query
+    );
+  }
+
+  const endpoint =
+    "https://himalayas.app/jobs/api/search?" +
+    params.toString();
+
+  return fetchJson(
+    endpoint,
+    {},
+    6000
+  );
+}
+
+
+/*
+ * =========================================================
+ * HIMALAYAS SOURCE-JOB DISCOVERY
+ * =========================================================
  *
- * AI Product Manager
+ * MULTI-STAGE DISCOVERY
  *
- * to incorrectly become:
+ * Stage 1:
+ *   Company + requested title
  *
- * Data Product Manager
+ * Stage 2:
+ *   Company-only pagination
  *
- * because both contain:
+ * Stage 3:
+ *   Broader title search
  *
- * product + manager
- *
- * Instead:
- *
- * 1. Search all available company pages.
- * 2. Immediately return ONLY an exact title match.
- * 3. Keep the strongest fuzzy candidate in memory.
- * 4. Continue pagination.
- * 5. Only use fuzzy matching after pagination finishes.
- *
- * This protects against a wrong early-page match.
+ * We never trust the first fuzzy result.
  * =========================================================
  */
 
@@ -595,57 +799,77 @@ async function getHimalayasJob(
   companySlug,
   jobSlug
 ) {
-  const titleQuery =
+  const requestedTitle =
     titleFromJobSlug(
       jobSlug
     );
 
   const normalizedTargetTitle =
     normalizeTitle(
-      titleQuery
+      requestedTitle
     );
 
-  const MAX_PAGES = 8;
+  if (!companySlug || !requestedTitle) {
+    return null;
+  }
 
-  let cursor = null;
+  const allCandidates = [];
 
-  const seenCursors =
+  const seenGuids =
     new Set();
 
-  let globalBest = null;
-  let globalBestScore = 0;
-
-  for (
-    let page = 0;
-    page < MAX_PAGES;
-    page++
-  ) {
-    const params =
-      new URLSearchParams({
-        company:
-          companySlug,
-
-        limit:
-          "20",
-      });
-
-    if (cursor) {
-      params.set(
-        "cursor",
-        cursor
-      );
+  function collectJobs(jobs) {
+    if (!Array.isArray(jobs)) {
+      return;
     }
 
-    const endpoint =
-      "https://himalayas.app/jobs/api/search?" +
-      params.toString();
+    for (const job of jobs) {
+      if (!job) {
+        continue;
+      }
 
+      const identity =
+        String(
+          job.guid ||
+          job.applicationLink ||
+          `${job.companySlug}:${job.title}:${job.pubDate || ""}`
+        );
+
+      if (
+        seenGuids.has(identity)
+      ) {
+        continue;
+      }
+
+      seenGuids.add(identity);
+
+      allCandidates.push(job);
+    }
+  }
+
+
+  /*
+   * =======================================================
+   * STAGE 1
+   * Company + exact-ish title search
+   * =======================================================
+   */
+
+  for (
+    let page = 1;
+    page <=
+    HIMALAYAS_TITLE_SEARCH_MAX_PAGES;
+    page++
+  ) {
     const result =
-      await fetchJson(
-        endpoint,
-        {},
-        5000
-      );
+      await searchHimalayasPage({
+        companySlug,
+        query:
+          requestedTitle,
+        page,
+        sort:
+          "relevant",
+      });
 
     if (
       !result.ok ||
@@ -654,33 +878,18 @@ async function getHimalayasJob(
         result.data.jobs
       )
     ) {
-      return null;
+      break;
     }
 
-    const jobs =
-      result.data.jobs;
-
-    /*
-     * =====================================================
-     * EXACT TITLE MATCH
-     * =====================================================
-     *
-     * Exact matches are returned immediately.
-     *
-     * Example:
-     *
-     * target:
-     * AI Product Manager
-     *
-     * job:
-     * AI Product Manager
-     */
+    collectJobs(
+      result.data.jobs
+    );
 
     const exact =
-      jobs.find(
+      result.data.jobs.find(
         (job) =>
           normalizeTitle(
-            job.title
+            job.title || ""
           ) ===
           normalizedTargetTitle
       );
@@ -689,78 +898,222 @@ async function getHimalayasJob(
       return exact;
     }
 
-    /*
-     * =====================================================
-     * FUZZY MATCH
-     * =====================================================
-     *
-     * We ONLY record the candidate.
-     *
-     * We DO NOT return it yet.
-     *
-     * This is the critical fix.
-     */
+    const totalCount =
+      numberValue(
+        result.data.totalCount
+      );
 
-    for (const job of jobs) {
-      const score =
-        titleSimilarity(
-          job.title,
-          titleQuery
-        );
-
-      if (
-        score >
-        globalBestScore
-      ) {
-        globalBestScore =
-          score;
-
-        globalBest = job;
-      }
-    }
-
-    /*
-     * =====================================================
-     * NEXT CURSOR
-     * =====================================================
-     */
-
-    const nextCursor =
-      result.data.nextCursor;
-
-    if (!nextCursor) {
+    if (
+      totalCount !== null &&
+      page * 20 >= totalCount
+    ) {
       break;
     }
 
     if (
-      seenCursors.has(
-        nextCursor
+      result.data.jobs.length < 20
+    ) {
+      break;
+    }
+  }
+
+
+  /*
+   * =======================================================
+   * STAGE 2
+   * Company-only search
+   *
+   * This is the important fallback.
+   *
+   * It catches jobs that aren't surfaced properly by the
+   * title search ranking.
+   * =======================================================
+   */
+
+  for (
+    let page = 1;
+    page <=
+    HIMALAYAS_COMPANY_SEARCH_MAX_PAGES;
+    page++
+  ) {
+    const result =
+      await searchHimalayasPage({
+        companySlug,
+        query:
+          "",
+        page,
+        sort:
+          "recent",
+      });
+
+    if (
+      !result.ok ||
+      !result.data ||
+      !Array.isArray(
+        result.data.jobs
       )
     ) {
       break;
     }
 
-    seenCursors.add(
-      nextCursor
+    collectJobs(
+      result.data.jobs
     );
 
-    cursor =
-      nextCursor;
+    const exact =
+      result.data.jobs.find(
+        (job) =>
+          normalizeTitle(
+            job.title || ""
+          ) ===
+          normalizedTargetTitle
+      );
+
+    if (exact) {
+      return exact;
+    }
+
+    const totalCount =
+      numberValue(
+        result.data.totalCount
+      );
+
+    if (
+      totalCount !== null &&
+      page * 20 >= totalCount
+    ) {
+      break;
+    }
+
+    if (
+      result.data.jobs.length < 20
+    ) {
+      break;
+    }
+  }
+
+
+  /*
+   * =======================================================
+   * STAGE 3
+   * Broader title search without company restriction
+   *
+   * This is deliberately last so we never accidentally
+   * select another company's job before exhausting the
+   * correct company.
+   * =======================================================
+   */
+
+  for (
+    let page = 1;
+    page <= 5;
+    page++
+  ) {
+    const result =
+      await searchHimalayasPage({
+        companySlug:
+          "",
+        query:
+          requestedTitle,
+        page,
+        sort:
+          "relevant",
+      });
+
+    if (
+      !result.ok ||
+      !result.data ||
+      !Array.isArray(
+        result.data.jobs
+      )
+    ) {
+      break;
+    }
+
+    for (
+      const job
+      of result.data.jobs
+    ) {
+      if (
+        normalizeCompany(
+          job.companySlug ||
+            job.companyName ||
+            ""
+        ) ===
+        normalizeCompany(
+          companySlug
+        )
+      ) {
+        collectJobs([
+          job,
+        ]);
+      }
+    }
+  }
+
+
+  /*
+   * =======================================================
+   * FINAL RANKING
+   *
+   * Exact title wins.
+   * Otherwise use strong fuzzy evidence.
+   * =======================================================
+   */
+
+  if (!allCandidates.length) {
+    return null;
+  }
+
+  const scored =
+    allCandidates
+      .map((job) => ({
+        job,
+
+        evidence:
+          scoreHimalayasCandidate(
+            job,
+            requestedTitle,
+            companySlug,
+            jobSlug
+          ),
+      }))
+      .sort(
+        (a, b) =>
+          b.evidence.score -
+          a.evidence.score
+      );
+
+  const best =
+    scored[0];
+
+  if (
+    !best ||
+    best.evidence.titleScore < 0.65
+  ) {
+    return null;
   }
 
   /*
-   * =====================================================
-   * FINAL FUZZY FALLBACK
-   * =====================================================
-   *
-   * Only after pagination has finished.
+   * Strong exact/near-exact title match.
    */
 
   if (
-    globalBest &&
-    globalBestScore >= 0.65
+    best.evidence.titleScore >=
+    0.90
   ) {
-    return globalBest;
+    return best.job;
+  }
+
+  /*
+   * Conservative fuzzy fallback.
+   */
+
+  if (
+    best.evidence.score >=
+    0.78
+  ) {
+    return best.job;
   }
 
   return null;
@@ -770,8 +1123,7 @@ async function getHimalayasJob(
 /*
  * =========================================================
  * COMPANY IDENTIFIER CANDIDATES
- * =========================================================
- */
+ * ========================================================= */
 
 function companyIdentifiers(
   companyName,
@@ -824,16 +1176,39 @@ function companyIdentifiers(
   add(compactSlug);
   add(compactName);
 
-  const firstWord =
-    normalizeCompany(
-      companyName
-    ).split(/\s+/)[0];
+  /*
+   * Add meaningful individual company-name tokens.
+   *
+   * This is intentionally generic.
+   */
 
-  add(firstWord);
+  const companyTokens =
+    normalize(
+      companyName
+    )
+      .split(/\s+/)
+      .map(
+        (token) =>
+          token.replace(
+            /[^a-z0-9]/g,
+            ""
+          )
+      )
+      .filter(
+        (token) =>
+          token.length >= 4
+      );
+
+  for (
+    const token
+    of companyTokens
+  ) {
+    add(token);
+  }
 
   return values.slice(
     0,
-    5
+    8
   );
 }
 
@@ -841,31 +1216,7 @@ function companyIdentifiers(
 /*
  * =========================================================
  * PROVIDER MATCH SCORING
- * =========================================================
- *
- * IMPORTANT TITLE FIX:
- *
- * The resolver can now have:
- *
- * sourceJob.requestedTitle
- *
- * AND
- *
- * sourceJob.title
- *
- * We compare the provider job against BOTH.
- *
- * This matters when Himalayas has:
- *
- * Data Product Manager
- *
- * while the actual source URL says:
- *
- * AI Product Manager
- *
- * The strongest title match wins.
- * =========================================================
- */
+ * ========================================================= */
 
 function scoreProviderJob(
   sourceJob,
@@ -903,13 +1254,17 @@ function scoreProviderJob(
     }
   }
 
-  if (titleScore < 0.78) {
+  if (
+    titleScore <
+    PROVIDER_MATCH_THRESHOLD
+  ) {
     return {
       score: 0,
       titleScore,
       locationScore: 0,
       descriptionScore: 0,
       salaryScore: 0,
+      identifierConfidence,
       matchedTitle,
     };
   }
@@ -938,6 +1293,7 @@ function scoreProviderJob(
       locationScore: 0,
       descriptionScore: 0,
       salaryScore: 0,
+      identifierConfidence,
       matchedTitle,
     };
   }
@@ -982,6 +1338,7 @@ function scoreProviderJob(
     locationScore,
     descriptionScore,
     salaryScore,
+    identifierConfidence,
     matchedTitle,
   };
 }
@@ -1000,16 +1357,24 @@ async function resolveGreenhouse(
   const attempts =
     identifiers.map(
       async (identifier) => {
+        const allJobs = [];
+
+        /*
+         * Greenhouse board endpoints commonly return the
+         * public board's jobs in one response. We request
+         * content so description matching is available.
+         */
+
         const url =
           `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(
             identifier
-          )}/jobs`;
+          )}/jobs?content=true`;
 
         const result =
           await fetchJson(
             url,
             {},
-            4500
+            5000
           );
 
         if (
@@ -1022,11 +1387,15 @@ async function resolveGreenhouse(
           return null;
         }
 
+        allJobs.push(
+          ...result.data.jobs
+        );
+
         let best = null;
 
         for (
           const job
-          of result.data.jobs
+          of allJobs
         ) {
           const candidate = {
             title:
@@ -1047,8 +1416,13 @@ async function resolveGreenhouse(
           };
 
           const confidence =
-            identifier ===
-            sourceJob.companySlug
+            normalizeCompany(
+              identifier
+            ) ===
+            normalizeCompany(
+              sourceJob.companySlug ||
+                ""
+            )
               ? 1
               : 0.9;
 
@@ -1061,7 +1435,7 @@ async function resolveGreenhouse(
 
           if (
             score.score >=
-              0.78 &&
+              PROVIDER_MATCH_THRESHOLD &&
             (!best ||
               score.score >
                 best.score.score)
@@ -1078,6 +1452,14 @@ async function resolveGreenhouse(
           return null;
         }
 
+        const applicationUrl =
+          best.job.absolute_url ||
+          "";
+
+        if (!isHttpUrl(applicationUrl)) {
+          return null;
+        }
+
         return {
           provider:
             "greenhouse",
@@ -1085,8 +1467,7 @@ async function resolveGreenhouse(
           method:
             "greenhouse-public-job-board-api",
 
-          applicationUrl:
-            best.job.absolute_url,
+          applicationUrl,
 
           matchedJob: {
             title:
@@ -1157,7 +1538,7 @@ async function resolveLever(
             await fetchJson(
               url,
               {},
-              4500
+              5000
             );
 
           if (
@@ -1209,8 +1590,13 @@ async function resolveLever(
             };
 
             const confidence =
-              identifier ===
-              sourceJob.companySlug
+              normalizeCompany(
+                identifier
+              ) ===
+              normalizeCompany(
+                sourceJob.companySlug ||
+                  ""
+              )
                 ? 1
                 : 0.9;
 
@@ -1223,7 +1609,7 @@ async function resolveLever(
 
             if (
               score.score >=
-                0.78 &&
+                PROVIDER_MATCH_THRESHOLD &&
               (!best ||
                 score.score >
                   best.score.score)
@@ -1240,6 +1626,19 @@ async function resolveLever(
             return null;
           }
 
+          const applicationUrl =
+            best.job.applyUrl ||
+            best.job.hostedUrl ||
+            "";
+
+          if (
+            !isHttpUrl(
+              applicationUrl
+            )
+          ) {
+            return null;
+          }
+
           return {
             provider:
               "lever",
@@ -1247,9 +1646,7 @@ async function resolveLever(
             method:
               "lever-public-postings-api",
 
-            applicationUrl:
-              best.job.applyUrl ||
-              best.job.hostedUrl,
+            applicationUrl,
 
             matchedJob: {
               title:
@@ -1279,11 +1676,7 @@ async function resolveLever(
 
   return (
     results
-      .filter(
-        (result) =>
-          result &&
-          result.applicationUrl
-      )
+      .filter(Boolean)
       .sort(
         (a, b) =>
           b.score.score -
@@ -1316,7 +1709,7 @@ async function resolveAshby(
           await fetchJson(
             url,
             {},
-            4500
+            5000
           );
 
         if (
@@ -1337,6 +1730,7 @@ async function resolveAshby(
         ) {
           const locations = [
             job.location || "",
+
             ...(Array.isArray(
               job.secondaryLocations
             )
@@ -1371,8 +1765,13 @@ async function resolveAshby(
           };
 
           const confidence =
-            identifier ===
-            sourceJob.companySlug
+            normalizeCompany(
+              identifier
+            ) ===
+            normalizeCompany(
+              sourceJob.companySlug ||
+                ""
+            )
               ? 1
               : 0.9;
 
@@ -1385,7 +1784,7 @@ async function resolveAshby(
 
           if (
             score.score >=
-              0.78 &&
+              PROVIDER_MATCH_THRESHOLD &&
             (!best ||
               score.score >
                 best.score.score)
@@ -1402,6 +1801,19 @@ async function resolveAshby(
           return null;
         }
 
+        const applicationUrl =
+          best.job.applyUrl ||
+          best.job.jobUrl ||
+          "";
+
+        if (
+          !isHttpUrl(
+            applicationUrl
+          )
+        ) {
+          return null;
+        }
+
         return {
           provider:
             "ashby",
@@ -1409,9 +1821,7 @@ async function resolveAshby(
           method:
             "ashby-public-job-posting-api",
 
-          applicationUrl:
-            best.job.applyUrl ||
-            best.job.jobUrl,
+          applicationUrl,
 
           matchedJob: {
             title:
@@ -1438,11 +1848,7 @@ async function resolveAshby(
 
   return (
     results
-      .filter(
-        (result) =>
-          result &&
-          result.applicationUrl
-      )
+      .filter(Boolean)
       .sort(
         (a, b) =>
           b.score.score -
@@ -1457,6 +1863,17 @@ async function resolveAshby(
  * =========================================================
  * SMARTRECRUITERS
  * =========================================================
+ *
+ * FUTURE-PROOFING:
+ *
+ * The old version only inspected the first 5 results.
+ *
+ * SmartRecruiters officially supports paginated postings
+ * with limit/offset.
+ *
+ * We now walk multiple pages and inspect every relevant
+ * candidate returned by the company endpoint.
+ * =========================================================
  */
 
 async function resolveSmartRecruiters(
@@ -1466,37 +1883,111 @@ async function resolveSmartRecruiters(
   const attempts =
     identifiers.map(
       async (identifier) => {
-        const searchUrl =
-          `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
-            identifier
-          )}/postings?limit=100&q=${encodeURIComponent(
-            sourceJob.requestedTitle ||
-              sourceJob.title
-          )}`;
+        const candidates = [];
 
-        const listResult =
-          await fetchJson(
-            searchUrl,
-            {},
-            4500
+        const MAX_PAGES = 10;
+        const LIMIT = 100;
+
+        for (
+          let page = 0;
+          page < MAX_PAGES;
+          page++
+        ) {
+          const offset =
+            page * LIMIT;
+
+          const searchUrl =
+            `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
+              identifier
+            )}/postings?limit=${LIMIT}&offset=${offset}&q=${encodeURIComponent(
+              sourceJob.requestedTitle ||
+                sourceJob.title
+            )}`;
+
+          const listResult =
+            await fetchJson(
+              searchUrl,
+              {},
+              5000
+            );
+
+          if (
+            !listResult.ok ||
+            !listResult.data ||
+            !Array.isArray(
+              listResult.data.content
+            )
+          ) {
+            break;
+          }
+
+          candidates.push(
+            ...listResult.data.content
           );
 
-        if (
-          !listResult.ok ||
-          !listResult.data ||
-          !Array.isArray(
+          const totalFound =
+            numberValue(
+              listResult.data
+                .totalFound
+            );
+
+          if (
+            totalFound !== null &&
+            offset +
+              listResult.data
+                .content.length >=
+              totalFound
+          ) {
+            break;
+          }
+
+          if (
             listResult.data.content
-          )
-        ) {
-          return null;
+              .length < LIMIT
+          ) {
+            break;
+          }
         }
 
-        const candidates =
-          listResult.data.content
-            .slice(0, 5);
+        /*
+         * De-duplicate posting IDs.
+         */
+
+        const unique =
+          new Map();
+
+        for (
+          const posting
+          of candidates
+        ) {
+          if (
+            posting?.id &&
+            !unique.has(
+              String(
+                posting.id
+              )
+            )
+          ) {
+            unique.set(
+              String(
+                posting.id
+              ),
+              posting
+            );
+          }
+        }
+
+        const postingCandidates =
+          Array.from(
+            unique.values()
+          );
+
+        /*
+         * Fetch detailed posting data.
+         */
 
         const detailAttempts =
-          candidates.map(
+          postingCandidates.map(
             async (posting) => {
               if (!posting.id) {
                 return null;
@@ -1513,7 +2004,7 @@ async function resolveSmartRecruiters(
                 await fetchJson(
                   detailUrl,
                   {},
-                  4500
+                  5000
                 );
 
               if (
@@ -1563,18 +2054,40 @@ async function resolveSmartRecruiters(
                   null,
               };
 
+              const confidence =
+                normalizeCompany(
+                  identifier
+                ) ===
+                normalizeCompany(
+                  sourceJob.companySlug ||
+                    ""
+                )
+                  ? 1
+                  : 0.9;
+
               const score =
                 scoreProviderJob(
                   sourceJob,
                   candidate,
-                  identifier ===
-                    sourceJob.companySlug
-                    ? 1
-                    : 0.9
+                  confidence
                 );
 
               if (
-                score.score < 0.78
+                score.score <
+                PROVIDER_MATCH_THRESHOLD
+              ) {
+                return null;
+              }
+
+              const applicationUrl =
+                detail.applyUrl ||
+                posting.applyUrl ||
+                "";
+
+              if (
+                !isHttpUrl(
+                  applicationUrl
+                )
               ) {
                 return null;
               }
@@ -1586,9 +2099,7 @@ async function resolveSmartRecruiters(
                 method:
                   "smartrecruiters-public-posting-api",
 
-                applicationUrl:
-                  detail.applyUrl ||
-                  "",
+                applicationUrl,
 
                 matchedJob: {
                   title:
@@ -1612,11 +2123,7 @@ async function resolveSmartRecruiters(
 
         return (
           results
-            .filter(
-              (result) =>
-                result &&
-                result.applicationUrl
-            )
+            .filter(Boolean)
             .sort(
               (a, b) =>
                 b.score.score -
@@ -1648,8 +2155,7 @@ async function resolveSmartRecruiters(
 /*
  * =========================================================
  * WORKABLE
- * =========================================================
- */
+ * ========================================================= */
 
 async function resolveWorkable(
   sourceJob,
@@ -1667,7 +2173,7 @@ async function resolveWorkable(
           await fetchJson(
             url,
             {},
-            4500
+            5000
           );
 
         if (
@@ -1725,19 +2231,27 @@ async function resolveWorkable(
               null,
           };
 
+          const confidence =
+            normalizeCompany(
+              identifier
+            ) ===
+            normalizeCompany(
+              sourceJob.companySlug ||
+                ""
+            )
+              ? 1
+              : 0.9;
+
           const score =
             scoreProviderJob(
               sourceJob,
               candidate,
-              identifier ===
-                sourceJob.companySlug
-                ? 1
-                : 0.9
+              confidence
             );
 
           if (
             score.score >=
-              0.78 &&
+              PROVIDER_MATCH_THRESHOLD &&
             (!best ||
               score.score >
                 best.score.score)
@@ -1754,6 +2268,20 @@ async function resolveWorkable(
           return null;
         }
 
+        const applicationUrl =
+          best.job.shortlink ||
+          best.job.application_url ||
+          best.job.url ||
+          "";
+
+        if (
+          !isHttpUrl(
+            applicationUrl
+          )
+        ) {
+          return null;
+        }
+
         return {
           provider:
             "workable",
@@ -1761,10 +2289,7 @@ async function resolveWorkable(
           method:
             "workable-public-careers-api",
 
-          applicationUrl:
-            best.job.shortlink ||
-            best.job.application_url ||
-            best.job.url,
+          applicationUrl,
 
           matchedJob: {
             title:
@@ -1792,11 +2317,7 @@ async function resolveWorkable(
 
   return (
     results
-      .filter(
-        (result) =>
-          result &&
-          result.applicationUrl
-      )
+      .filter(Boolean)
       .sort(
         (a, b) =>
           b.score.score -
@@ -1810,8 +2331,7 @@ async function resolveWorkable(
 /*
  * =========================================================
  * RECRUITEE
- * =========================================================
- */
+ * ========================================================= */
 
 async function resolveRecruitee(
   sourceJob,
@@ -1829,7 +2349,7 @@ async function resolveRecruitee(
           await fetchJson(
             url,
             {},
-            4500
+            5000
           );
 
         if (
@@ -1860,7 +2380,8 @@ async function resolveRecruitee(
             offer.status &&
             normalize(
               offer.status
-            ) !== "published"
+            ) !==
+              "published"
           ) {
             continue;
           }
@@ -1898,19 +2419,27 @@ async function resolveRecruitee(
               null,
           };
 
+          const confidence =
+            normalizeCompany(
+              identifier
+            ) ===
+            normalizeCompany(
+              sourceJob.companySlug ||
+                ""
+            )
+              ? 1
+              : 0.9;
+
           const score =
             scoreProviderJob(
               sourceJob,
               candidate,
-              identifier ===
-                sourceJob.companySlug
-                ? 1
-                : 0.9
+              confidence
             );
 
           if (
             score.score >=
-              0.78 &&
+              PROVIDER_MATCH_THRESHOLD &&
             (!best ||
               score.score >
                 best.score.score)
@@ -1935,7 +2464,11 @@ async function resolveRecruitee(
           best.offer.applyUrl ||
           "";
 
-        if (!applicationUrl) {
+        if (
+          !isHttpUrl(
+            applicationUrl
+          )
+        ) {
           return null;
         }
 
@@ -1974,11 +2507,7 @@ async function resolveRecruitee(
 
   return (
     results
-      .filter(
-        (result) =>
-          result &&
-          result.applicationUrl
-      )
+      .filter(Boolean)
       .sort(
         (a, b) =>
           b.score.score -
@@ -1992,8 +2521,7 @@ async function resolveRecruitee(
 /*
  * =========================================================
  * UNIVERSAL PROVIDER RESOLUTION
- * =========================================================
- */
+ * ========================================================= */
 
 async function resolveUniversal(
   sourceJob,
@@ -2008,36 +2536,42 @@ async function resolveUniversal(
   const providers = [
     {
       name: "greenhouse",
+
       resolve:
         resolveGreenhouse,
     },
 
     {
       name: "lever",
+
       resolve:
         resolveLever,
     },
 
     {
       name: "ashby",
+
       resolve:
         resolveAshby,
     },
 
     {
       name: "smartrecruiters",
+
       resolve:
         resolveSmartRecruiters,
     },
 
     {
       name: "workable",
+
       resolve:
         resolveWorkable,
     },
 
     {
       name: "recruitee",
+
       resolve:
         resolveRecruitee,
     },
@@ -2052,7 +2586,13 @@ async function resolveUniversal(
               sourceJob,
               identifiers
             );
-          } catch {
+          } catch (error) {
+            console.error(
+              `Provider ${provider.name} failed:`,
+              error?.message ||
+                "unknown error"
+            );
+
             return null;
           }
         }
@@ -2063,7 +2603,10 @@ async function resolveUniversal(
     results.filter(
       (result) =>
         result &&
-        result.applicationUrl
+        result.applicationUrl &&
+        isHttpUrl(
+          result.applicationUrl
+        )
     );
 
   if (!matches.length) {
@@ -2083,14 +2626,16 @@ async function resolveUniversal(
 /*
  * =========================================================
  * MAIN HANDLER
- * =========================================================
- */
+ * ========================================================= */
 
 export default async function handler(
   req,
   res
 ) {
-  if (req.method === "OPTIONS") {
+  if (
+    req.method ===
+    "OPTIONS"
+  ) {
     return sendJson(
       res,
       200,
@@ -2098,7 +2643,10 @@ export default async function handler(
     );
   }
 
-  if (req.method !== "GET") {
+  if (
+    req.method !==
+    "GET"
+  ) {
     return sendJson(
       res,
       405,
@@ -2124,7 +2672,11 @@ export default async function handler(
       );
     }
 
-    if (!isHttpUrl(originalUrl)) {
+    if (
+      !isHttpUrl(
+        originalUrl
+      )
+    ) {
       return sendJson(
         res,
         400,
@@ -2135,7 +2687,11 @@ export default async function handler(
       );
     }
 
-    if (!isHimalayasUrl(originalUrl)) {
+    if (
+      !isHimalayasUrl(
+        originalUrl
+      )
+    ) {
       return sendJson(
         res,
         400,
@@ -2164,7 +2720,8 @@ export default async function handler(
           applyUrl:
             originalUrl,
 
-          resolved: false,
+          resolved:
+            false,
 
           method:
             "fallback-invalid-himalayas-job-url",
@@ -2172,9 +2729,10 @@ export default async function handler(
       );
     }
 
+
     /*
      * =====================================================
-     * HIMALAYAS LOOKUP
+     * HIMALAYAS SOURCE-JOB LOOKUP
      * =====================================================
      */
 
@@ -2197,7 +2755,8 @@ export default async function handler(
           applyUrl:
             originalUrl,
 
-          resolved: false,
+          resolved:
+            false,
 
           method:
             "fallback-himalayas-job-not-found",
@@ -2214,18 +2773,23 @@ export default async function handler(
       );
     }
 
+
     /*
      * =====================================================
      * BUILD SOURCE JOB
      * =====================================================
      *
-     * IMPORTANT:
+     * We deliberately preserve:
      *
-     * requestedTitle comes from the original URL slug.
+     * requestedTitle
+     *      ↓
+     * original URL-derived title
      *
-     * title comes from Himalayas API.
+     * title
+     *      ↓
+     * Himalayas API title
      *
-     * We preserve both.
+     * This is critical for cases like YipitData.
      * =====================================================
      */
 
@@ -2288,6 +2852,13 @@ export default async function handler(
           : [],
     };
 
+
+    /*
+     * =====================================================
+     * UNIVERSAL ATS RESOLUTION
+     * =====================================================
+     */
+
     const resolved =
       await resolveUniversal(
         sourceJob,
@@ -2310,7 +2881,8 @@ export default async function handler(
           applyUrl:
             resolved.applicationUrl,
 
-          resolved: true,
+          resolved:
+            true,
 
           provider:
             resolved.provider,
@@ -2356,6 +2928,15 @@ export default async function handler(
                   3
                 )
               ),
+
+            identifierConfidence:
+              Number(
+                (
+                  resolved.score
+                    .identifierConfidence ??
+                  0
+                ).toFixed(3)
+              ),
           },
 
           source: {
@@ -2364,6 +2945,9 @@ export default async function handler(
 
             title:
               sourceJob.title,
+
+            requestedTitle:
+              sourceJob.requestedTitle,
 
             employmentType:
               sourceJob.employmentType,
@@ -2384,6 +2968,13 @@ export default async function handler(
       );
     }
 
+
+    /*
+     * =====================================================
+     * SAFE FALLBACK
+     * =====================================================
+     */
+
     return sendJson(
       res,
       200,
@@ -2396,7 +2987,8 @@ export default async function handler(
         applyUrl:
           originalUrl,
 
-        resolved: false,
+        resolved:
+          false,
 
         method:
           "fallback-no-verified-ats-match",
