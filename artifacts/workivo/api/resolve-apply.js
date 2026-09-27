@@ -562,40 +562,215 @@ async function getHimalayasJob(
   companySlug,
   jobSlug
 ) {
-  const titleQuery =
-    jobSlug
+  /*
+   * Himalayas job slugs sometimes contain a numeric
+   * identifier at the end.
+   *
+   * Example:
+   *
+   * ai-product-manager-5205658339
+   *
+   * The real job title is:
+   *
+   * AI Product Manager
+   *
+   * So we remove trailing numeric IDs before searching.
+   */
+
+  const cleanedSlug =
+    String(jobSlug || "")
       .replace(/[-_]+/g, " ")
+      .replace(/\s+\d{5,}$/g, "")
       .trim();
 
-  const endpoint =
+  /*
+   * -------------------------------------------------------
+   * SEARCH 1
+   * -------------------------------------------------------
+   *
+   * Search Himalayas using the cleaned job title.
+   *
+   * This preserves the existing successful behavior for
+   * normal jobs such as:
+   *
+   * software-engineer-benchmarking
+   *
+   * while fixing jobs such as:
+   *
+   * ai-product-manager-5205658339
+   */
+
+  const titleEndpoint =
     "https://himalayas.app/jobs/api/search?" +
     new URLSearchParams({
       company:
         companySlug,
 
       q:
-        titleQuery,
+        cleanedSlug,
 
       page:
         "1",
     }).toString();
 
-  const result =
+  const titleResult =
     await fetchJson(
-      endpoint,
+      titleEndpoint,
       {},
       5000
     );
 
   if (
-    !result.ok ||
-    !result.data ||
+    titleResult.ok &&
+    titleResult.data &&
+    Array.isArray(
+      titleResult.data.jobs
+    )
+  ) {
+    const jobs =
+      titleResult.data.jobs;
+
+    /*
+     * First preference:
+     * exact title match.
+     */
+
+    const exact =
+      jobs.find(
+        (job) =>
+          normalizeTitle(
+            job.title
+          ) ===
+          normalizeTitle(
+            cleanedSlug
+          )
+      );
+
+    if (exact) {
+      return exact;
+    }
+
+    /*
+     * Second preference:
+     * strongest title similarity.
+     */
+
+    let best = null;
+    let bestScore = 0;
+
+    for (const job of jobs) {
+      const score =
+        titleSimilarity(
+          job.title,
+          cleanedSlug
+        );
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = job;
+      }
+    }
+
+    if (
+      best &&
+      bestScore >= 0.65
+    ) {
+      return best;
+    }
+  }
+
+  /*
+   * -------------------------------------------------------
+   * SEARCH 2 — COMPANY FALLBACK
+   * -------------------------------------------------------
+   *
+   * If the title search fails, search the company's jobs
+   * without a title query.
+   *
+   * This protects us against Himalayas search quirks.
+   */
+
+  const companyEndpoint =
+    "https://himalayas.app/jobs/api/search?" +
+    new URLSearchParams({
+      company:
+        companySlug,
+
+      page:
+        "1",
+    }).toString();
+
+  const companyResult =
+    await fetchJson(
+      companyEndpoint,
+      {},
+      5000
+    );
+
+  if (
+    !companyResult.ok ||
+    !companyResult.data ||
     !Array.isArray(
-      result.data.jobs
+      companyResult.data.jobs
     )
   ) {
     return null;
   }
+
+  const companyJobs =
+    companyResult.data.jobs;
+
+  /*
+   * Exact title match from company results.
+   */
+
+  const exactCompanyJob =
+    companyJobs.find(
+      (job) =>
+        normalizeTitle(
+          job.title
+        ) ===
+        normalizeTitle(
+          cleanedSlug
+        )
+    );
+
+  if (exactCompanyJob) {
+    return exactCompanyJob;
+  }
+
+  /*
+   * Strongest company-level title match.
+   */
+
+  let bestCompanyJob = null;
+  let bestCompanyScore = 0;
+
+  for (const job of companyJobs) {
+    const score =
+      titleSimilarity(
+        job.title,
+        cleanedSlug
+      );
+
+    if (
+      score >
+      bestCompanyScore
+    ) {
+      bestCompanyScore = score;
+      bestCompanyJob = job;
+    }
+  }
+
+  if (
+    bestCompanyJob &&
+    bestCompanyScore >= 0.65
+  ) {
+    return bestCompanyJob;
+  }
+
+  return null;
+}
 
   const jobs =
     result.data.jobs;
