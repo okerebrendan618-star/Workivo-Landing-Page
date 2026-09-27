@@ -21,9 +21,7 @@ const HIMALAYAS_HOSTS = new Set([
  *      ↓
  * Himalayas source lookup (when available)
  *      ↓
- * If source lookup fails:
- *      ↓
- * Continue using URL-derived title
+ * Himalayas page Apply-link discovery
  *      ↓
  * Public ATS discovery
  *      ↓
@@ -46,8 +44,9 @@ const HIMALAYAS_HOSTS = new Set([
  * - No hardcoded employer mappings
  * - No invented URLs
  * - Himalayas search uses PAGE pagination
- * - Himalayas browse uses CURSOR pagination
  * - ATS resolution can continue even if Himalayas lookup fails
+ * - Direct Apply links from the actual Himalayas page are used
+ *   when available
  *
  * =========================================================
  */
@@ -68,6 +67,65 @@ const PROVIDER_MATCH_THRESHOLD = 0.78;
 const FETCH_TIMEOUT_MS = 5000;
 
 const MAX_COMPANY_IDENTIFIERS = 8;
+
+
+/*
+ * =========================================================
+ * KNOWN ATS HOSTS
+ * =========================================================
+ *
+ * These are used only to verify that an outbound Himalayas
+ * Apply link points to a recognized ATS/application system.
+ *
+ * No company-specific mappings are used.
+ * =========================================================
+ */
+
+const ATS_HOST_PATTERNS = [
+  {
+    provider: "greenhouse",
+    patterns: [
+      "greenhouse.io",
+      "greenhouse.com",
+    ],
+  },
+
+  {
+    provider: "lever",
+    patterns: [
+      "lever.co",
+      "hire.lever.co",
+    ],
+  },
+
+  {
+    provider: "ashby",
+    patterns: [
+      "ashbyhq.com",
+    ],
+  },
+
+  {
+    provider: "smartrecruiters",
+    patterns: [
+      "smartrecruiters.com",
+    ],
+  },
+
+  {
+    provider: "workable",
+    patterns: [
+      "workable.com",
+    ],
+  },
+
+  {
+    provider: "recruitee",
+    patterns: [
+      "recruitee.com",
+    ],
+  },
+];
 
 
 /*
@@ -187,20 +245,6 @@ function companyNameFromSlug(slug = "") {
 /*
  * =========================================================
  * TITLE EXTRACTION FROM HIMALAYAS JOB SLUG
- * =========================================================
- *
- * Examples:
- *
- * ai-product-manager-5205658339
- * → ai product manager
- *
- * senior-ai-engineer
- * → senior ai engineer
- *
- * senior-ai-engineer-1435622807
- * → senior ai engineer
- *
- * Numeric suffixes of 4+ digits are treated as listing IDs.
  * =========================================================
  */
 
@@ -673,6 +717,314 @@ async function fetchJson(
 
 /*
  * =========================================================
+ * HIMALAYAS PAGE FETCH
+ * =========================================================
+ *
+ * NEW:
+ *
+ * If the Himalayas API cannot identify the listing, we
+ * inspect the actual job page and look for its outbound
+ * "Apply now" link.
+ *
+ * This prevents Workivo from depending entirely on
+ * rediscovering the job through Himalayas search.
+ * =========================================================
+ */
+
+async function fetchHimalayasPageHtml(
+  url
+) {
+  try {
+    const response =
+      await fetchWithTimeout(
+        url,
+        {
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml",
+          },
+        },
+        7000
+      );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return await response.text();
+  } catch {
+    return null;
+  }
+}
+
+
+/*
+ * =========================================================
+ * ATS HOST DETECTION
+ * =========================================================
+ */
+
+function detectAtsProviderFromUrl(
+  value
+) {
+  try {
+    const parsed =
+      new URL(value);
+
+    const hostname =
+      parsed.hostname
+        .toLowerCase()
+        .replace(/^www\./, "");
+
+    for (
+      const provider
+      of ATS_HOST_PATTERNS
+    ) {
+      for (
+        const pattern
+        of provider.patterns
+      ) {
+        if (
+          hostname === pattern ||
+          hostname.endsWith(
+            `.${pattern}`
+          )
+        ) {
+          return provider.provider;
+        }
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+
+/*
+ * =========================================================
+ * HTML ENTITY DECODING
+ * =========================================================
+ */
+
+function decodeHtmlEntities(
+  value = ""
+) {
+  return String(value)
+    .replace(
+      /&amp;/gi,
+      "&"
+    )
+    .replace(
+      /&quot;/gi,
+      '"'
+    )
+    .replace(
+      /&#39;|&#x27;/gi,
+      "'"
+    )
+    .replace(
+      /&lt;/gi,
+      "<"
+    )
+    .replace(
+      /&gt;/gi,
+      ">"
+    );
+}
+
+
+/*
+ * =========================================================
+ * DIRECT HIMALAYAS APPLY LINK DISCOVERY
+ * =========================================================
+ *
+ * NEW:
+ *
+ * Looks specifically for external links associated with
+ * "Apply now" and only accepts recognized ATS domains.
+ *
+ * We do NOT accept arbitrary external links.
+ * =========================================================
+ */
+
+function extractDirectHimalayasApplyLink(
+  html
+) {
+  if (!html) {
+    return null;
+  }
+
+  const candidates = [];
+
+  /*
+   * Extract normal anchor tags.
+   */
+
+  const anchorRegex =
+    /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+  let match;
+
+  while (
+    (match =
+      anchorRegex.exec(html)) !== null
+  ) {
+    const href =
+      decodeHtmlEntities(
+        match[1]
+      ).trim();
+
+    const text =
+      normalize(
+        match[2]
+          .replace(
+            /<[^>]*>/g,
+            " "
+          )
+      );
+
+    if (!href) {
+      continue;
+    }
+
+    let absoluteUrl = href;
+
+    try {
+      absoluteUrl =
+        new URL(
+          href,
+          "https://himalayas.app"
+        ).toString();
+    } catch {
+      continue;
+    }
+
+    if (
+      !isHttpUrl(
+        absoluteUrl
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      isHimalayasUrl(
+        absoluteUrl
+      )
+    ) {
+      continue;
+    }
+
+    const provider =
+      detectAtsProviderFromUrl(
+        absoluteUrl
+      );
+
+    if (!provider) {
+      continue;
+    }
+
+    const applyText =
+      text.includes("apply") ||
+      text.includes("application") ||
+      text.includes("apply now");
+
+    candidates.push({
+      url:
+        absoluteUrl,
+      provider,
+      score:
+        applyText
+          ? 1
+          : 0.75,
+    });
+  }
+
+
+  /*
+   * Some pages can expose the destination URL in
+   * JSON/script data rather than a normal anchor.
+   *
+   * Look for known ATS URLs in the raw HTML as a
+   * secondary fallback.
+   */
+
+  const knownUrlRegex =
+    /https?:\/\/[^"'\\\s<>]+/gi;
+
+  const rawUrls =
+    html.match(
+      knownUrlRegex
+    ) || [];
+
+  for (
+    const rawUrl
+    of rawUrls
+  ) {
+    const cleaned =
+      decodeHtmlEntities(
+        rawUrl
+      )
+        .replace(
+          /[),.;]+$/,
+          ""
+        );
+
+    const provider =
+      detectAtsProviderFromUrl(
+        cleaned
+      );
+
+    if (
+      !provider ||
+      !isHttpUrl(cleaned)
+    ) {
+      continue;
+    }
+
+    if (
+      isHimalayasUrl(cleaned)
+    ) {
+      continue;
+    }
+
+    if (
+      candidates.some(
+        (item) =>
+          item.url ===
+          cleaned
+      )
+    ) {
+      continue;
+    }
+
+    candidates.push({
+      url:
+        cleaned,
+      provider,
+      score:
+        0.65,
+    });
+  }
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  candidates.sort(
+    (a, b) =>
+      b.score -
+      a.score
+  );
+
+  return candidates[0];
+}
+
+
+/*
+ * =========================================================
  * HIMALAYAS URL PARSER
  * =========================================================
  */
@@ -832,15 +1184,6 @@ function scoreHimalayasCandidate(
  * =========================================================
  * HIMALAYAS SEARCH REQUEST
  * =========================================================
- *
- * IMPORTANT:
- *
- * /jobs/api/search uses PAGE pagination.
- *
- * Cursor belongs to /jobs/api.
- *
- * We therefore NEVER send cursor to /jobs/api/search.
- * =========================================================
  */
 
 async function searchHimalayasPage({
@@ -946,17 +1289,6 @@ function buildTitleQueries(
  * =========================================================
  * HIMALAYAS SOURCE JOB DISCOVERY
  * =========================================================
- *
- * SEARCH ORDER
- *
- * 1. Company + title
- * 2. Company + alternate title variants
- * 3. Company-only pages
- * 4. Global title search, filtered back to company
- *
- * The function deliberately returns null only after these
- * bounded searches have been exhausted.
- * =========================================================
  */
 
 async function getHimalayasJob(
@@ -975,11 +1307,6 @@ async function getHimalayasJob(
     return null;
   }
 
-  const normalizedTargetTitle =
-    normalizeTitle(
-      requestedTitle
-    );
-
   const allCandidates = [];
 
   const seen =
@@ -996,12 +1323,6 @@ async function getHimalayasJob(
       if (!job) {
         continue;
       }
-
-      /*
-       * Only accept the requested company.
-       *
-       * This is especially important during broad title search.
-       */
 
       if (
         !companyMatches(
@@ -1064,10 +1385,8 @@ async function getHimalayasJob(
 
 
   /*
-   * =======================================================
    * STAGE 1
    * Company + title search
-   * =======================================================
    */
 
   const titleQueries =
@@ -1144,13 +1463,8 @@ async function getHimalayasJob(
 
 
   /*
-   * =======================================================
    * STAGE 2
    * Company-only search
-   *
-   * This catches listings that title search ranking does
-   * not expose correctly.
-   * =======================================================
    */
 
   for (
@@ -1216,12 +1530,8 @@ async function getHimalayasJob(
 
 
   /*
-   * =======================================================
    * STAGE 3
    * Global title search
-   *
-   * We filter the results back to the requested company.
-   * =======================================================
    */
 
   for (
@@ -1276,9 +1586,7 @@ async function getHimalayasJob(
 
 
   /*
-   * =======================================================
    * FINAL HIMALAYAS RANKING
-   * =======================================================
    */
 
   if (!allCandidates.length) {
@@ -1311,20 +1619,12 @@ async function getHimalayasJob(
     return null;
   }
 
-  /*
-   * Very strong title match.
-   */
-
   if (
     best.evidence.titleScore >=
     0.90
   ) {
     return best.job;
   }
-
-  /*
-   * Strong combined match.
-   */
 
   if (
     best.evidence.titleScore >=
@@ -1342,18 +1642,6 @@ async function getHimalayasJob(
 /*
  * =========================================================
  * COMPANY IDENTIFIERS
- * =========================================================
- *
- * ATS board identifiers are not always identical to the
- * Himalayas company slug.
- *
- * Example:
- *
- * smartrecruiters-inc
- * smartrecruiters
- * smartrecruitersinc
- *
- * We generate several generic candidates.
  * =========================================================
  */
 
@@ -1431,11 +1719,6 @@ function companyIdentifiers(
   ) {
     add(token);
   }
-
-  /*
-   * Remove generic legal suffixes if they were retained
-   * as standalone identifiers.
-   */
 
   const filtered =
     values.filter(
@@ -2194,10 +2477,6 @@ async function resolveSmartRecruiters(
           }
         }
 
-        /*
-         * De-duplicate postings.
-         */
-
         const unique =
           new Map();
 
@@ -2223,11 +2502,6 @@ async function resolveSmartRecruiters(
             );
           }
         }
-
-        /*
-         * If the title query returned nothing, perform one
-         * company-only fallback request.
-         */
 
         if (!unique.size) {
           const fallbackUrl =
@@ -2280,12 +2554,6 @@ async function resolveSmartRecruiters(
           );
 
         let best = null;
-
-        /*
-         * Only inspect the most relevant candidates.
-         *
-         * This prevents unnecessary detail requests.
-         */
 
         for (
           const posting
@@ -2834,6 +3102,81 @@ async function resolveRecruitee(
 
 /*
  * =========================================================
+ * DIRECT HIMALAYAS APPLY RESOLUTION
+ * =========================================================
+ *
+ * NEW:
+ *
+ * This is intentionally separate from universal ATS
+ * discovery.
+ *
+ * If Himalayas already gives us the actual external
+ * application link, use that information instead of trying
+ * to guess the employer's ATS board identifier.
+ * =========================================================
+ */
+
+async function resolveFromHimalayasApplyLink(
+  originalUrl
+) {
+  const html =
+    await fetchHimalayasPageHtml(
+      originalUrl
+    );
+
+  if (!html) {
+    return null;
+  }
+
+  const direct =
+    extractDirectHimalayasApplyLink(
+      html
+    );
+
+  if (!direct) {
+    return null;
+  }
+
+  return {
+    provider:
+      direct.provider,
+
+    method:
+      "himalayas-page-apply-link",
+
+    applicationUrl:
+      direct.url,
+
+    matchedJob: null,
+
+    score: {
+      score:
+        direct.score,
+
+      titleScore:
+        0,
+
+      locationScore:
+        0,
+
+      descriptionScore:
+        0,
+
+      salaryScore:
+        0,
+
+      identifierConfidence:
+        direct.score,
+    },
+
+    identifier:
+      null,
+  };
+}
+
+
+/*
+ * =========================================================
  * UNIVERSAL ATS RESOLUTION
  * =========================================================
  */
@@ -3056,10 +3399,6 @@ export default async function handler(
      * =====================================================
      * REQUEST OVERRIDES
      * =====================================================
-     *
-     * These are optional.
-     *
-     * Normal Workivo usage does not need them.
      */
 
     const requestedTitle =
@@ -3076,14 +3415,6 @@ export default async function handler(
     /*
      * =====================================================
      * HIMALAYAS SOURCE LOOKUP
-     * =====================================================
-     *
-     * IMPORTANT:
-     *
-     * Failure here is NO LONGER FATAL.
-     *
-     * We still continue to ATS resolution using the URL
-     * itself as the source of the title/company.
      * =====================================================
      */
 
@@ -3110,17 +3441,6 @@ export default async function handler(
     /*
      * =====================================================
      * BUILD SOURCE JOB
-     * =====================================================
-     *
-     * If Himalayas lookup succeeded:
-     *
-     *   use its full data.
-     *
-     * If it failed:
-     *
-     *   use URL-derived title/company.
-     *
-     * This is the major reliability improvement.
      * =====================================================
      */
 
@@ -3189,6 +3509,146 @@ export default async function handler(
           ? himalayasJob.locationRestrictions
           : [],
     };
+
+
+    /*
+     * =====================================================
+     * NEW STEP:
+     *
+     * TRY THE ACTUAL HIMALAYAS APPLY LINK FIRST.
+     *
+     * This is important because the job page can already
+     * tell us the employer's actual ATS/application URL.
+     * =====================================================
+     */
+
+    let directPageResolution = null;
+
+    try {
+      directPageResolution =
+        await resolveFromHimalayasApplyLink(
+          originalUrl
+        );
+    } catch (error) {
+      console.error(
+        "Himalayas Apply-link discovery failed:",
+        error?.message ||
+          "unknown error"
+      );
+
+      directPageResolution =
+        null;
+    }
+
+    if (
+      directPageResolution &&
+      directPageResolution.applicationUrl
+    ) {
+      return sendJson(
+        res,
+        200,
+        {
+          originalUrl,
+
+          finalUrl:
+            directPageResolution.applicationUrl,
+
+          applyUrl:
+            directPageResolution.applicationUrl,
+
+          resolved:
+            true,
+
+          provider:
+            directPageResolution.provider,
+
+          method:
+            directPageResolution.method,
+
+          matchedJob:
+            directPageResolution.matchedJob,
+
+          matchScore:
+            Number(
+              directPageResolution.score.score.toFixed(
+                3
+              )
+            ),
+
+          matchEvidence: {
+            titleScore:
+              Number(
+                directPageResolution.score.titleScore.toFixed(
+                  3
+                )
+              ),
+
+            locationScore:
+              Number(
+                directPageResolution.score.locationScore.toFixed(
+                  3
+                )
+              ),
+
+            descriptionScore:
+              Number(
+                directPageResolution.score.descriptionScore.toFixed(
+                  3
+                )
+              ),
+
+            salaryScore:
+              Number(
+                directPageResolution.score.salaryScore.toFixed(
+                  3
+                )
+              ),
+
+            identifierConfidence:
+              Number(
+                (
+                  directPageResolution
+                    .score
+                    .identifierConfidence ??
+                  0
+                ).toFixed(3)
+              ),
+          },
+
+          source: {
+            company:
+              sourceJob.company,
+
+            title:
+              sourceJob.title,
+
+            requestedTitle:
+              sourceJob.requestedTitle,
+
+            employmentType:
+              sourceJob.employmentType,
+
+            minSalary:
+              sourceJob.minSalary,
+
+            maxSalary:
+              sourceJob.maxSalary,
+
+            currency:
+              sourceJob.currency,
+
+            salaryPeriod:
+              sourceJob.salaryPeriod,
+
+            himalayasLookup:
+              sourceLookupAvailable,
+
+            himalayasApplyLink:
+              true,
+          },
+        }
+      );
+    }
 
 
     /*
@@ -3304,6 +3764,9 @@ export default async function handler(
 
             himalayasLookup:
               sourceLookupAvailable,
+
+            himalayasApplyLink:
+              false,
           },
         }
       );
@@ -3313,16 +3776,6 @@ export default async function handler(
     /*
      * =====================================================
      * SAFE FALLBACK
-     * =====================================================
-     *
-     * IMPORTANT:
-     *
-     * "Himalayas job not found" is deliberately NOT used
-     * here anymore.
-     *
-     * If we reach this point, the resolver has actually
-     * checked the ATS providers and simply did not find a
-     * sufficiently verified direct application URL.
      * =====================================================
      */
 
@@ -3371,9 +3824,13 @@ export default async function handler(
 
           himalayasLookup:
             sourceLookupAvailable,
+
+          himalayasApplyLink:
+            false,
         },
 
         checkedProviders: [
+          "himalayas-page-apply-link",
           "greenhouse",
           "lever",
           "ashby",
