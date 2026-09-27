@@ -558,233 +558,44 @@ function extractHimalayasJob(
  * =========================================================
  */
 
-async function getHimalayasJob(companySlug, jobSlug) {
-  const cleanedSlug = String(jobSlug || "")
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+\d{5,}$/g, "")
-    .trim();
+async function getHimalayasJob(
+  companySlug,
+  jobSlug
+) {
+  const titleQuery =
+    jobSlug
+      .replace(/[-_]+/g, " ")
+      .trim();
 
-  // First attempt: search the company + cleaned job title.
-  // Keep this short so the Vercel function doesn't hang.
-  const titleEndpoint =
-    "https://himalayas.app/jobs/api/search?" +
-    new URLSearchParams({
-      company: companySlug,
-      q: cleanedSlug,
-      page: "1",
-    }).toString();
-
-  const titleResult = await fetchJson(titleEndpoint, {}, 2500);
-
-  if (
-    titleResult.ok &&
-    titleResult.data &&
-    Array.isArray(titleResult.data.jobs)
-  ) {
-    const jobs = titleResult.data.jobs;
-
-    // Exact title match
-    const exact = jobs.find(
-      (job) =>
-        normalizeTitle(job.title) ===
-        normalizeTitle(cleanedSlug)
-    );
-
-    if (exact) {
-      return exact;
-    }
-
-    // Strongest title match
-    let best = null;
-    let bestScore = 0;
-
-    for (const job of jobs) {
-      const score = titleSimilarity(job.title, cleanedSlug);
-
-      if (score > bestScore) {
-        bestScore = score;
-        best = job;
-      }
-    }
-
-    if (best && bestScore >= 0.65) {
-      return best;
-    }
-  }
-
-  // Second attempt only if the title search didn't work.
-  // Short timeout prevents Vercel from hanging.
-  const companyEndpoint =
-    "https://himalayas.app/jobs/api/search?" +
-    new URLSearchParams({
-      company: companySlug,
-      page: "1",
-    }).toString();
-
-  const companyResult = await fetchJson(companyEndpoint, {}, 2500);
-
-  if (
-    !companyResult.ok ||
-    !companyResult.data ||
-    !Array.isArray(companyResult.data.jobs)
-  ) {
-    return null;
-  }
-
-  const companyJobs = companyResult.data.jobs;
-
-  // Exact title match from company results
-  const exactCompanyJob = companyJobs.find(
-    (job) =>
-      normalizeTitle(job.title) ===
-      normalizeTitle(cleanedSlug)
-  );
-
-  if (exactCompanyJob) {
-    return exactCompanyJob;
-  }
-
-  // Best company-level title match
-  let bestCompanyJob = null;
-  let bestCompanyScore = 0;
-
-  for (const job of companyJobs) {
-    const score = titleSimilarity(job.title, cleanedSlug);
-
-    if (score > bestCompanyScore) {
-      bestCompanyScore = score;
-      bestCompanyJob = job;
-    }
-  }
-
-  if (bestCompanyJob && bestCompanyScore >= 0.65) {
-    return bestCompanyJob;
-  }
-
-  return null;
-}
-
-    /*
-     * Second preference:
-     * strongest title similarity.
-     */
-
-    let best = null;
-    let bestScore = 0;
-
-    for (const job of jobs) {
-      const score =
-        titleSimilarity(
-          job.title,
-          cleanedSlug
-        );
-
-      if (score > bestScore) {
-        bestScore = score;
-        best = job;
-      }
-    }
-
-    if (
-      best &&
-      bestScore >= 0.65
-    ) {
-      return best;
-    }
-  }
-
-  /*
-   * -------------------------------------------------------
-   * SEARCH 2 — COMPANY FALLBACK
-   * -------------------------------------------------------
-   *
-   * If the title search fails, search the company's jobs
-   * without a title query.
-   *
-   * This protects us against Himalayas search quirks.
-   */
-
-  const companyEndpoint =
+  const endpoint =
     "https://himalayas.app/jobs/api/search?" +
     new URLSearchParams({
       company:
         companySlug,
 
+      q:
+        titleQuery,
+
       page:
         "1",
     }).toString();
 
-  const companyResult =
+  const result =
     await fetchJson(
-      companyEndpoint,
+      endpoint,
       {},
       5000
     );
 
   if (
-    !companyResult.ok ||
-    !companyResult.data ||
+    !result.ok ||
+    !result.data ||
     !Array.isArray(
-      companyResult.data.jobs
+      result.data.jobs
     )
   ) {
     return null;
   }
-
-  const companyJobs =
-    companyResult.data.jobs;
-
-  /*
-   * Exact title match from company results.
-   */
-
-  const exactCompanyJob =
-    companyJobs.find(
-      (job) =>
-        normalizeTitle(
-          job.title
-        ) ===
-        normalizeTitle(
-          cleanedSlug
-        )
-    );
-
-  if (exactCompanyJob) {
-    return exactCompanyJob;
-  }
-
-  /*
-   * Strongest company-level title match.
-   */
-
-  let bestCompanyJob = null;
-  let bestCompanyScore = 0;
-
-  for (const job of companyJobs) {
-    const score =
-      titleSimilarity(
-        job.title,
-        cleanedSlug
-      );
-
-    if (
-      score >
-      bestCompanyScore
-    ) {
-      bestCompanyScore = score;
-      bestCompanyJob = job;
-    }
-  }
-
-  if (
-    bestCompanyJob &&
-    bestCompanyScore >= 0.65
-  ) {
-    return bestCompanyJob;
-  }
-
-  return null;
-}
 
   const jobs =
     result.data.jobs;
