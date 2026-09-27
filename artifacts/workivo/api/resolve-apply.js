@@ -558,97 +558,111 @@ function extractHimalayasJob(
  * =========================================================
  */
 
-async function getHimalayasJob(
-  companySlug,
-  jobSlug
-) {
-  /*
-   * Himalayas job slugs sometimes contain a numeric
-   * identifier at the end.
-   *
-   * Example:
-   *
-   * ai-product-manager-5205658339
-   *
-   * The real job title is:
-   *
-   * AI Product Manager
-   *
-   * So we remove trailing numeric IDs before searching.
-   */
+async function getHimalayasJob(companySlug, jobSlug) {
+  const cleanedSlug = String(jobSlug || "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+\d{5,}$/g, "")
+    .trim();
 
-  const cleanedSlug =
-    String(jobSlug || "")
-      .replace(/[-_]+/g, " ")
-      .replace(/\s+\d{5,}$/g, "")
-      .trim();
-
-  /*
-   * -------------------------------------------------------
-   * SEARCH 1
-   * -------------------------------------------------------
-   *
-   * Search Himalayas using the cleaned job title.
-   *
-   * This preserves the existing successful behavior for
-   * normal jobs such as:
-   *
-   * software-engineer-benchmarking
-   *
-   * while fixing jobs such as:
-   *
-   * ai-product-manager-5205658339
-   */
-
+  // First attempt: search the company + cleaned job title.
+  // Keep this short so the Vercel function doesn't hang.
   const titleEndpoint =
     "https://himalayas.app/jobs/api/search?" +
     new URLSearchParams({
-      company:
-        companySlug,
-
-      q:
-        cleanedSlug,
-
-      page:
-        "1",
+      company: companySlug,
+      q: cleanedSlug,
+      page: "1",
     }).toString();
 
-  const titleResult =
-    await fetchJson(
-      titleEndpoint,
-      {},
-      5000
-    );
+  const titleResult = await fetchJson(titleEndpoint, {}, 2500);
 
   if (
     titleResult.ok &&
     titleResult.data &&
-    Array.isArray(
-      titleResult.data.jobs
-    )
+    Array.isArray(titleResult.data.jobs)
   ) {
-    const jobs =
-      titleResult.data.jobs;
+    const jobs = titleResult.data.jobs;
 
-    /*
-     * First preference:
-     * exact title match.
-     */
-
-    const exact =
-      jobs.find(
-        (job) =>
-          normalizeTitle(
-            job.title
-          ) ===
-          normalizeTitle(
-            cleanedSlug
-          )
-      );
+    // Exact title match
+    const exact = jobs.find(
+      (job) =>
+        normalizeTitle(job.title) ===
+        normalizeTitle(cleanedSlug)
+    );
 
     if (exact) {
       return exact;
     }
+
+    // Strongest title match
+    let best = null;
+    let bestScore = 0;
+
+    for (const job of jobs) {
+      const score = titleSimilarity(job.title, cleanedSlug);
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = job;
+      }
+    }
+
+    if (best && bestScore >= 0.65) {
+      return best;
+    }
+  }
+
+  // Second attempt only if the title search didn't work.
+  // Short timeout prevents Vercel from hanging.
+  const companyEndpoint =
+    "https://himalayas.app/jobs/api/search?" +
+    new URLSearchParams({
+      company: companySlug,
+      page: "1",
+    }).toString();
+
+  const companyResult = await fetchJson(companyEndpoint, {}, 2500);
+
+  if (
+    !companyResult.ok ||
+    !companyResult.data ||
+    !Array.isArray(companyResult.data.jobs)
+  ) {
+    return null;
+  }
+
+  const companyJobs = companyResult.data.jobs;
+
+  // Exact title match from company results
+  const exactCompanyJob = companyJobs.find(
+    (job) =>
+      normalizeTitle(job.title) ===
+      normalizeTitle(cleanedSlug)
+  );
+
+  if (exactCompanyJob) {
+    return exactCompanyJob;
+  }
+
+  // Best company-level title match
+  let bestCompanyJob = null;
+  let bestCompanyScore = 0;
+
+  for (const job of companyJobs) {
+    const score = titleSimilarity(job.title, cleanedSlug);
+
+    if (score > bestCompanyScore) {
+      bestCompanyScore = score;
+      bestCompanyJob = job;
+    }
+  }
+
+  if (bestCompanyJob && bestCompanyScore >= 0.65) {
+    return bestCompanyJob;
+  }
+
+  return null;
+}
 
     /*
      * Second preference:
