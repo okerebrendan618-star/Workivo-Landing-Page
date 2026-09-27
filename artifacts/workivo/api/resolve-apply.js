@@ -13,13 +13,17 @@ const HIMALAYAS_HOSTS = new Set([
  * WORKIVO UNIVERSAL APPLICATION RESOLVER
  * =========================================================
  *
- * PURPOSE
+ * FLOW
  *
- * Himalayas job URL
+ * Himalayas URL
  *      ↓
- * Robust Himalayas source-job discovery
+ * URL-derived company + job title
  *      ↓
- * Preserve URL-derived title + API title
+ * Himalayas source lookup (when available)
+ *      ↓
+ * If source lookup fails:
+ *      ↓
+ * Continue using URL-derived title
  *      ↓
  * Public ATS discovery
  *      ↓
@@ -37,10 +41,13 @@ const HIMALAYAS_HOSTS = new Set([
  *
  * IMPORTANT
  *
- * No company-specific job IDs.
- * No company-specific application URLs.
- * No hardcoded employer mappings.
- * No invented URLs.
+ * - No company-specific job IDs
+ * - No company-specific application URLs
+ * - No hardcoded employer mappings
+ * - No invented URLs
+ * - Himalayas search uses PAGE pagination
+ * - Himalayas browse uses CURSOR pagination
+ * - ATS resolution can continue even if Himalayas lookup fails
  *
  * =========================================================
  */
@@ -50,32 +57,29 @@ const HIMALAYAS_HOSTS = new Set([
  * =========================================================
  * CONFIGURATION
  * =========================================================
- *
- * These are generic safety/performance limits.
- * They are NOT company-specific hardcodes.
- * =========================================================
  */
 
-const HIMALAYAS_TITLE_SEARCH_MAX_PAGES = 20;
-const HIMALAYAS_COMPANY_SEARCH_MAX_PAGES = 20;
+const HIMALAYAS_TITLE_SEARCH_MAX_PAGES = 5;
+const HIMALAYAS_COMPANY_SEARCH_MAX_PAGES = 12;
+const HIMALAYAS_BROAD_SEARCH_MAX_PAGES = 3;
 
 const PROVIDER_MATCH_THRESHOLD = 0.78;
 
 const FETCH_TIMEOUT_MS = 5000;
 
+const MAX_COMPANY_IDENTIFIERS = 8;
+
 
 /*
  * =========================================================
- * BASIC RESPONSE HELPERS
+ * RESPONSE HELPERS
  * =========================================================
  */
 
 function sendJson(res, status, body) {
   res.status(status);
 
-  for (const [key, value] of Object.entries(
-    JSON_HEADERS
-  )) {
+  for (const [key, value] of Object.entries(JSON_HEADERS)) {
     res.setHeader(key, value);
   }
 
@@ -85,7 +89,7 @@ function sendJson(res, status, body) {
 
 /*
  * =========================================================
- * URL HELPERS
+ * BASIC URL HELPERS
  * =========================================================
  */
 
@@ -169,38 +173,48 @@ function slugify(value = "") {
     .replace(/^-+|-+$/g, "");
 }
 
+function companyNameFromSlug(slug = "") {
+  return String(slug || "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) =>
+      letter.toUpperCase()
+    );
+}
+
 
 /*
  * =========================================================
- * REQUESTED TITLE FROM HIMALAYAS SLUG
+ * TITLE EXTRACTION FROM HIMALAYAS JOB SLUG
  * =========================================================
  *
  * Examples:
  *
  * ai-product-manager-5205658339
- *      ↓
- * ai product manager
+ * → ai product manager
  *
  * senior-ai-engineer
- *      ↓
- * senior ai engineer
+ * → senior ai engineer
  *
- * Numeric suffixes with 5+ digits are treated as listing
- * identifiers rather than title text.
+ * senior-ai-engineer-1435622807
+ * → senior ai engineer
+ *
+ * Numeric suffixes of 4+ digits are treated as listing IDs.
  * =========================================================
  */
 
 function titleFromJobSlug(jobSlug = "") {
   return String(jobSlug || "")
     .replace(/[-_]+/g, " ")
-    .replace(/\s+\d{5,}$/g, "")
+    .replace(/\s+\d{4,}$/g, "")
     .trim();
 }
 
 
 /*
  * =========================================================
- * TOKEN / SIMILARITY HELPERS
+ * STOP WORDS / SIMILARITY
  * =========================================================
  */
 
@@ -297,72 +311,91 @@ function titleSimilarity(a, b) {
     return 1;
   }
 
+  return jaccardSimilarity(first, second);
+}
+
+
+/*
+ * =========================================================
+ * JOB SLUG / TITLE MATCHING
+ * =========================================================
+ */
+
+function cleanRequestedJobSlug(jobSlug = "") {
+  return slugify(
+    String(jobSlug || "")
+      .replace(/[-_]+\d{4,}$/g, "")
+  );
+}
+
+function jobSlugSimilarity(requestedJobSlug = "", job = {}) {
+  const requestedSlug =
+    cleanRequestedJobSlug(
+      requestedJobSlug
+    );
+
+  if (!requestedSlug) {
+    return 0;
+  }
+
+  const titleSlug =
+    slugify(job.title || "");
+
+  if (!titleSlug) {
+    return 0;
+  }
+
+  if (titleSlug === requestedSlug) {
+    return 1;
+  }
+
   return jaccardSimilarity(
-    first,
-    second
+    requestedSlug.replace(/-/g, " "),
+    titleSlug.replace(/-/g, " ")
+  );
+}
+
+function exactJobTitleMatch(
+  job,
+  requestedTitle,
+  requestedJobSlug
+) {
+  if (!job) {
+    return false;
+  }
+
+  const normalizedRequested =
+    normalizeTitle(requestedTitle);
+
+  const normalizedJob =
+    normalizeTitle(job.title || "");
+
+  if (
+    normalizedRequested &&
+    normalizedRequested === normalizedJob
+  ) {
+    return true;
+  }
+
+  const requestedSlug =
+    cleanRequestedJobSlug(
+      requestedJobSlug
+    );
+
+  const jobTitleSlug =
+    slugify(job.title || "");
+
+  return (
+    requestedSlug &&
+    jobTitleSlug &&
+    requestedSlug === jobTitleSlug
   );
 }
 
 
 /*
  * =========================================================
- * JOB SLUG SIMILARITY
- * =========================================================
- *
- * Used only as a secondary signal.
- *
- * This helps distinguish records when Himalayas has multiple
- * jobs with identical or very similar titles.
- * =========================================================
- */
-
-function jobSlugSimilarity(
-  requestedJobSlug = "",
-  job = {}
-) {
-  const requested =
-    slugify(
-      String(requestedJobSlug)
-        .replace(
-          /\d{5,}$/g,
-          ""
-        )
-    );
-
-  const candidates = [
-    job.slug,
-    job.jobSlug,
-    job.guid,
-    job.applicationLink,
-  ]
-    .filter(Boolean)
-    .map(slugify);
-
-  if (!requested || !candidates.length) {
-    return 0;
-  }
-
-  let best = 0;
-
-  for (const candidate of candidates) {
-    const score =
-      jaccardSimilarity(
-        requested,
-        candidate
-      );
-
-    if (score > best) {
-      best = score;
-    }
-  }
-
-  return best;
-}
-
-
-/*
- * =========================================================
- * COUNTRY / LOCATION MATCHING
+ * LOCATION HELPERS
  * =========================================================
  */
 
@@ -473,24 +506,16 @@ function salaryMatches(
   }
 
   const sourceMin =
-    numberValue(
-      sourceJob.minSalary
-    );
+    numberValue(sourceJob.minSalary);
 
   const sourceMax =
-    numberValue(
-      sourceJob.maxSalary
-    );
+    numberValue(sourceJob.maxSalary);
 
   const providerMin =
-    numberValue(
-      providerJob.minSalary
-    );
+    numberValue(providerJob.minSalary);
 
   const providerMax =
-    numberValue(
-      providerJob.maxSalary
-    );
+    numberValue(providerJob.maxSalary);
 
   if (
     sourceMin === null ||
@@ -518,6 +543,12 @@ function salaryMatches(
  * =========================================================
  */
 
+function sleep(ms) {
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
+}
+
 async function fetchWithTimeout(
   url,
   options = {},
@@ -533,25 +564,22 @@ async function fetchWithTimeout(
     );
 
   try {
-    const response =
-      await fetch(
-        url,
-        {
-          ...options,
+    return await fetch(
+      url,
+      {
+        ...options,
 
-          signal:
-            controller.signal,
+        signal:
+          controller.signal,
 
-          headers: {
-            Accept:
-              "application/json",
+        headers: {
+          Accept:
+            "application/json",
 
-            ...(options.headers || {}),
-          },
-        }
-      );
-
-    return response;
+          ...(options.headers || {}),
+        },
+      }
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -560,51 +588,96 @@ async function fetchWithTimeout(
 async function fetchJson(
   url,
   options = {},
-  timeoutMs = FETCH_TIMEOUT_MS
+  timeoutMs = FETCH_TIMEOUT_MS,
+  retries = 1
 ) {
-  try {
-    const response =
-      await fetchWithTimeout(
-        url,
-        options,
-        timeoutMs
-      );
+  let lastStatus = 0;
 
-    if (!response.ok) {
+  for (
+    let attempt = 0;
+    attempt <= retries;
+    attempt++
+  ) {
+    try {
+      const response =
+        await fetchWithTimeout(
+          url,
+          options,
+          timeoutMs
+        );
+
+      lastStatus =
+        response.status;
+
+      if (
+        response.status === 429 &&
+        attempt < retries
+      ) {
+        const retryAfter =
+          Number(
+            response.headers.get(
+              "retry-after"
+            )
+          );
+
+        const waitMs =
+          Number.isFinite(
+            retryAfter
+          )
+            ? Math.min(
+                retryAfter * 1000,
+                2000
+              )
+            : 400;
+
+        await sleep(waitMs);
+
+        continue;
+      }
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          status:
+            response.status,
+          data: null,
+        };
+      }
+
+      const data =
+        await response.json();
+
       return {
-        ok: false,
-        status: response.status,
-        data: null,
+        ok: true,
+        status:
+          response.status,
+        data,
       };
+    } catch {
+      if (
+        attempt < retries
+      ) {
+        await sleep(250);
+        continue;
+      }
     }
-
-    const data =
-      await response.json();
-
-    return {
-      ok: true,
-      status: response.status,
-      data,
-    };
-  } catch {
-    return {
-      ok: false,
-      status: 0,
-      data: null,
-    };
   }
+
+  return {
+    ok: false,
+    status: lastStatus,
+    data: null,
+  };
 }
 
 
 /*
  * =========================================================
- * HIMALAYAS JOB URL PARSER
+ * HIMALAYAS URL PARSER
  * =========================================================
  */
 
-function extractHimalayasJob(
-  url
-) {
+function extractHimalayasJob(url) {
   try {
     const parsed =
       new URL(url);
@@ -646,7 +719,62 @@ function extractHimalayasJob(
 
 /*
  * =========================================================
- * HIMALAYAS JOB CANDIDATE SCORING
+ * HIMALAYAS COMPANY MATCH
+ * =========================================================
+ */
+
+function companyMatches(
+  job,
+  requestedCompanySlug
+) {
+  const requested =
+    normalizeCompany(
+      requestedCompanySlug
+    );
+
+  if (!requested) {
+    return false;
+  }
+
+  const jobSlug =
+    normalizeCompany(
+      job?.companySlug || ""
+    );
+
+  const jobName =
+    normalizeCompany(
+      job?.companyName || ""
+    );
+
+  if (
+    requested === jobSlug ||
+    requested === jobName
+  ) {
+    return true;
+  }
+
+  if (
+    jobSlug &&
+    (
+      requested.includes(jobSlug) ||
+      jobSlug.includes(requested)
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    jaccardSimilarity(
+      requested,
+      jobSlug || jobName
+    ) >= 0.75
+  );
+}
+
+
+/*
+ * =========================================================
+ * HIMALAYAS CANDIDATE SCORING
  * =========================================================
  */
 
@@ -663,19 +791,12 @@ function scoreHimalayasCandidate(
     );
 
   const companyScore =
-    normalizeCompany(
-      job.companySlug || ""
-    ) ===
-    normalizeCompany(
-      companySlug || ""
+    companyMatches(
+      job,
+      companySlug
     )
       ? 1
-      : jaccardSimilarity(
-          companySlug,
-          job.companySlug ||
-            job.companyName ||
-            ""
-        );
+      : 0;
 
   const slugScore =
     jobSlugSimilarity(
@@ -683,24 +804,19 @@ function scoreHimalayasCandidate(
       job
     );
 
-  /*
-   * Exact title is the strongest source-job signal.
-   */
-
   let score =
-    titleScore * 0.65 +
+    titleScore * 0.70 +
     companyScore * 0.20 +
-    slugScore * 0.15;
+    slugScore * 0.10;
 
   if (
-    normalizeTitle(
-      job.title || ""
-    ) ===
-    normalizeTitle(
-      requestedTitle
+    exactJobTitleMatch(
+      job,
+      requestedTitle,
+      jobSlug
     )
   ) {
-    score += 0.20;
+    score += 0.15;
   }
 
   return {
@@ -714,30 +830,27 @@ function scoreHimalayasCandidate(
 
 /*
  * =========================================================
- * HIMALAYAS SEARCH PAGE
+ * HIMALAYAS SEARCH REQUEST
  * =========================================================
  *
  * IMPORTANT:
  *
  * /jobs/api/search uses PAGE pagination.
  *
- * We deliberately do NOT send cursor here.
+ * Cursor belongs to /jobs/api.
+ *
+ * We therefore NEVER send cursor to /jobs/api/search.
  * =========================================================
  */
 
 async function searchHimalayasPage({
-  companySlug,
-  query,
-  page,
+  companySlug = "",
+  query = "",
+  page = 1,
   sort = "relevant",
 }) {
   const params =
     new URLSearchParams();
-
-  params.set(
-    "limit",
-    "20"
-  );
 
   params.set(
     "page",
@@ -770,61 +883,132 @@ async function searchHimalayasPage({
   return fetchJson(
     endpoint,
     {},
-    6000
+    6000,
+    1
   );
 }
 
 
 /*
  * =========================================================
- * HIMALAYAS SOURCE-JOB DISCOVERY
+ * HIMALAYAS TITLE QUERY VARIANTS
+ * =========================================================
+ */
+
+function buildTitleQueries(
+  requestedTitle,
+  jobSlug
+) {
+  const values = [];
+
+  function add(value) {
+    const cleaned =
+      normalizeTitle(value);
+
+    if (
+      cleaned &&
+      !values.includes(cleaned)
+    ) {
+      values.push(cleaned);
+    }
+  }
+
+  add(requestedTitle);
+
+  add(
+    String(jobSlug || "")
+      .replace(
+        /[-_]+\d{4,}$/,
+        ""
+      )
+      .replace(
+        /[-_]+/g,
+        " "
+      )
+  );
+
+  const tokens =
+    tokenSet(requestedTitle);
+
+  if (tokens.size >= 2) {
+    add(
+      Array.from(tokens)
+        .slice(0, 4)
+        .join(" ")
+    );
+  }
+
+  return values.slice(0, 3);
+}
+
+
+/*
+ * =========================================================
+ * HIMALAYAS SOURCE JOB DISCOVERY
  * =========================================================
  *
- * MULTI-STAGE DISCOVERY
+ * SEARCH ORDER
  *
- * Stage 1:
- *   Company + requested title
+ * 1. Company + title
+ * 2. Company + alternate title variants
+ * 3. Company-only pages
+ * 4. Global title search, filtered back to company
  *
- * Stage 2:
- *   Company-only pagination
- *
- * Stage 3:
- *   Broader title search
- *
- * We never trust the first fuzzy result.
+ * The function deliberately returns null only after these
+ * bounded searches have been exhausted.
  * =========================================================
  */
 
 async function getHimalayasJob(
   companySlug,
-  jobSlug
+  jobSlug,
+  requestedTitleOverride = ""
 ) {
   const requestedTitle =
-    titleFromJobSlug(
-      jobSlug
-    );
+    requestedTitleOverride ||
+    titleFromJobSlug(jobSlug);
+
+  if (
+    !companySlug ||
+    !requestedTitle
+  ) {
+    return null;
+  }
 
   const normalizedTargetTitle =
     normalizeTitle(
       requestedTitle
     );
 
-  if (!companySlug || !requestedTitle) {
-    return null;
-  }
-
   const allCandidates = [];
 
-  const seenGuids =
+  const seen =
     new Set();
 
-  function collectJobs(jobs) {
+  function collectJobs(
+    jobs
+  ) {
     if (!Array.isArray(jobs)) {
       return;
     }
 
     for (const job of jobs) {
       if (!job) {
+        continue;
+      }
+
+      /*
+       * Only accept the requested company.
+       *
+       * This is especially important during broad title search.
+       */
+
+      if (
+        !companyMatches(
+          job,
+          companySlug
+        )
+      ) {
         continue;
       }
 
@@ -836,84 +1020,125 @@ async function getHimalayasJob(
         );
 
       if (
-        seenGuids.has(identity)
+        seen.has(identity)
       ) {
         continue;
       }
 
-      seenGuids.add(identity);
+      seen.add(identity);
 
       allCandidates.push(job);
     }
+  }
+
+  function findExact(
+    jobs
+  ) {
+    if (!Array.isArray(jobs)) {
+      return null;
+    }
+
+    for (const job of jobs) {
+      if (
+        !companyMatches(
+          job,
+          companySlug
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        exactJobTitleMatch(
+          job,
+          requestedTitle,
+          jobSlug
+        )
+      ) {
+        return job;
+      }
+    }
+
+    return null;
   }
 
 
   /*
    * =======================================================
    * STAGE 1
-   * Company + exact-ish title search
+   * Company + title search
    * =======================================================
    */
 
-  for (
-    let page = 1;
-    page <=
-    HIMALAYAS_TITLE_SEARCH_MAX_PAGES;
-    page++
-  ) {
-    const result =
-      await searchHimalayasPage({
-        companySlug,
-        query:
-          requestedTitle,
-        page,
-        sort:
-          "relevant",
-      });
-
-    if (
-      !result.ok ||
-      !result.data ||
-      !Array.isArray(
-        result.data.jobs
-      )
-    ) {
-      break;
-    }
-
-    collectJobs(
-      result.data.jobs
+  const titleQueries =
+    buildTitleQueries(
+      requestedTitle,
+      jobSlug
     );
 
-    const exact =
-      result.data.jobs.find(
-        (job) =>
-          normalizeTitle(
-            job.title || ""
-          ) ===
-          normalizedTargetTitle
-      );
-
-    if (exact) {
-      return exact;
-    }
-
-    const totalCount =
-      numberValue(
-        result.data.totalCount
-      );
-
-    if (
-      totalCount !== null &&
-      page * 20 >= totalCount
+  for (
+    const query
+    of titleQueries
+  ) {
+    for (
+      let page = 1;
+      page <=
+      HIMALAYAS_TITLE_SEARCH_MAX_PAGES;
+      page++
     ) {
-      break;
-    }
+      const result =
+        await searchHimalayasPage({
+          companySlug,
+          query,
+          page,
+          sort:
+            "relevant",
+        });
 
-    if (
-      result.data.jobs.length < 20
-    ) {
-      break;
+      if (
+        !result.ok ||
+        !result.data ||
+        !Array.isArray(
+          result.data.jobs
+        )
+      ) {
+        break;
+      }
+
+      const jobs =
+        result.data.jobs;
+
+      const exact =
+        findExact(jobs);
+
+      if (exact) {
+        return exact;
+      }
+
+      collectJobs(jobs);
+
+      const responseLimit =
+        numberValue(
+          result.data.limit
+        ) || 20;
+
+      const totalCount =
+        numberValue(
+          result.data.totalCount
+        );
+
+      if (
+        !jobs.length ||
+        jobs.length <
+          responseLimit ||
+        (
+          totalCount !== null &&
+          page * responseLimit >=
+            totalCount
+        )
+      ) {
+        break;
+      }
     }
   }
 
@@ -923,10 +1148,8 @@ async function getHimalayasJob(
    * STAGE 2
    * Company-only search
    *
-   * This is the important fallback.
-   *
-   * It catches jobs that aren't surfaced properly by the
-   * title search ranking.
+   * This catches listings that title search ranking does
+   * not expose correctly.
    * =======================================================
    */
 
@@ -939,8 +1162,7 @@ async function getHimalayasJob(
     const result =
       await searchHimalayasPage({
         companySlug,
-        query:
-          "",
+        query: "",
         page,
         sort:
           "recent",
@@ -956,22 +1178,22 @@ async function getHimalayasJob(
       break;
     }
 
-    collectJobs(
-      result.data.jobs
-    );
+    const jobs =
+      result.data.jobs;
 
     const exact =
-      result.data.jobs.find(
-        (job) =>
-          normalizeTitle(
-            job.title || ""
-          ) ===
-          normalizedTargetTitle
-      );
+      findExact(jobs);
 
     if (exact) {
       return exact;
     }
+
+    collectJobs(jobs);
+
+    const responseLimit =
+      numberValue(
+        result.data.limit
+      ) || 20;
 
     const totalCount =
       numberValue(
@@ -979,14 +1201,14 @@ async function getHimalayasJob(
       );
 
     if (
-      totalCount !== null &&
-      page * 20 >= totalCount
-    ) {
-      break;
-    }
-
-    if (
-      result.data.jobs.length < 20
+      !jobs.length ||
+      jobs.length <
+        responseLimit ||
+      (
+        totalCount !== null &&
+        page * responseLimit >=
+          totalCount
+      )
     ) {
       break;
     }
@@ -996,57 +1218,58 @@ async function getHimalayasJob(
   /*
    * =======================================================
    * STAGE 3
-   * Broader title search without company restriction
+   * Global title search
    *
-   * This is deliberately last so we never accidentally
-   * select another company's job before exhausting the
-   * correct company.
+   * We filter the results back to the requested company.
    * =======================================================
    */
 
   for (
-    let page = 1;
-    page <= 5;
-    page++
+    const query
+    of titleQueries.slice(0, 2)
   ) {
-    const result =
-      await searchHimalayasPage({
-        companySlug:
-          "",
-        query:
-          requestedTitle,
-        page,
-        sort:
-          "relevant",
-      });
-
-    if (
-      !result.ok ||
-      !result.data ||
-      !Array.isArray(
-        result.data.jobs
-      )
-    ) {
-      break;
-    }
-
     for (
-      const job
-      of result.data.jobs
+      let page = 1;
+      page <=
+      HIMALAYAS_BROAD_SEARCH_MAX_PAGES;
+      page++
     ) {
+      const result =
+        await searchHimalayasPage({
+          companySlug: "",
+          query,
+          page,
+          sort:
+            "relevant",
+        });
+
       if (
-        normalizeCompany(
-          job.companySlug ||
-            job.companyName ||
-            ""
-        ) ===
-        normalizeCompany(
-          companySlug
+        !result.ok ||
+        !result.data ||
+        !Array.isArray(
+          result.data.jobs
         )
       ) {
-        collectJobs([
-          job,
-        ]);
+        break;
+      }
+
+      const jobs =
+        result.data.jobs;
+
+      const exact =
+        findExact(jobs);
+
+      if (exact) {
+        return exact;
+      }
+
+      collectJobs(jobs);
+
+      if (
+        !jobs.length ||
+        jobs.length < 20
+      ) {
+        break;
       }
     }
   }
@@ -1054,10 +1277,7 @@ async function getHimalayasJob(
 
   /*
    * =======================================================
-   * FINAL RANKING
-   *
-   * Exact title wins.
-   * Otherwise use strong fuzzy evidence.
+   * FINAL HIMALAYAS RANKING
    * =======================================================
    */
 
@@ -1087,15 +1307,12 @@ async function getHimalayasJob(
   const best =
     scored[0];
 
-  if (
-    !best ||
-    best.evidence.titleScore < 0.65
-  ) {
+  if (!best) {
     return null;
   }
 
   /*
-   * Strong exact/near-exact title match.
+   * Very strong title match.
    */
 
   if (
@@ -1106,12 +1323,14 @@ async function getHimalayasJob(
   }
 
   /*
-   * Conservative fuzzy fallback.
+   * Strong combined match.
    */
 
   if (
+    best.evidence.titleScore >=
+      0.65 &&
     best.evidence.score >=
-    0.78
+      0.78
   ) {
     return best.job;
   }
@@ -1122,8 +1341,21 @@ async function getHimalayasJob(
 
 /*
  * =========================================================
- * COMPANY IDENTIFIER CANDIDATES
- * ========================================================= */
+ * COMPANY IDENTIFIERS
+ * =========================================================
+ *
+ * ATS board identifiers are not always identical to the
+ * Himalayas company slug.
+ *
+ * Example:
+ *
+ * smartrecruiters-inc
+ * smartrecruiters
+ * smartrecruitersinc
+ *
+ * We generate several generic candidates.
+ * =========================================================
+ */
 
 function companyIdentifiers(
   companyName,
@@ -1176,12 +1408,6 @@ function companyIdentifiers(
   add(compactSlug);
   add(compactName);
 
-  /*
-   * Add meaningful individual company-name tokens.
-   *
-   * This is intentionally generic.
-   */
-
   const companyTokens =
     normalize(
       companyName
@@ -1206,17 +1432,38 @@ function companyIdentifiers(
     add(token);
   }
 
-  return values.slice(
-    0,
-    8
-  );
+  /*
+   * Remove generic legal suffixes if they were retained
+   * as standalone identifiers.
+   */
+
+  const filtered =
+    values.filter(
+      (value) =>
+        ![
+          "inc",
+          "llc",
+          "ltd",
+          "limited",
+          "corp",
+          "company",
+          "co",
+        ].includes(value)
+    );
+
+  return filtered
+    .slice(
+      0,
+      MAX_COMPANY_IDENTIFIERS
+    );
 }
 
 
 /*
  * =========================================================
  * PROVIDER MATCH SCORING
- * ========================================================= */
+ * =========================================================
+ */
 
 function scoreProviderJob(
   sourceJob,
@@ -1226,8 +1473,7 @@ function scoreProviderJob(
   const titleCandidates = [
     sourceJob.requestedTitle,
     sourceJob.title,
-  ]
-    .filter(Boolean);
+  ].filter(Boolean);
 
   let titleScore = 0;
   let matchedTitle = "";
@@ -1326,11 +1572,9 @@ function scoreProviderJob(
     Math.min(
       descriptionScore,
       1
-    ) *
-      0.10 +
+    ) * 0.10 +
     salaryScore * 0.05 +
-    identifierConfidence *
-      0.10;
+    identifierConfidence * 0.10;
 
   return {
     score,
@@ -1357,14 +1601,6 @@ async function resolveGreenhouse(
   const attempts =
     identifiers.map(
       async (identifier) => {
-        const allJobs = [];
-
-        /*
-         * Greenhouse board endpoints commonly return the
-         * public board's jobs in one response. We request
-         * content so description matching is available.
-         */
-
         const url =
           `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(
             identifier
@@ -1374,7 +1610,8 @@ async function resolveGreenhouse(
           await fetchJson(
             url,
             {},
-            5000
+            5000,
+            0
           );
 
         if (
@@ -1387,15 +1624,11 @@ async function resolveGreenhouse(
           return null;
         }
 
-        allJobs.push(
-          ...result.data.jobs
-        );
-
         let best = null;
 
         for (
           const job
-          of allJobs
+          of result.data.jobs
         ) {
           const candidate = {
             title:
@@ -1436,9 +1669,11 @@ async function resolveGreenhouse(
           if (
             score.score >=
               PROVIDER_MATCH_THRESHOLD &&
-            (!best ||
+            (
+              !best ||
               score.score >
-                best.score.score)
+                best.score.score
+            )
           ) {
             best = {
               score,
@@ -1456,7 +1691,11 @@ async function resolveGreenhouse(
           best.job.absolute_url ||
           "";
 
-        if (!isHttpUrl(applicationUrl)) {
+        if (
+          !isHttpUrl(
+            applicationUrl
+          )
+        ) {
           return null;
         }
 
@@ -1538,7 +1777,8 @@ async function resolveLever(
             await fetchJson(
               url,
               {},
-              5000
+              5000,
+              0
             );
 
           if (
@@ -1610,9 +1850,11 @@ async function resolveLever(
             if (
               score.score >=
                 PROVIDER_MATCH_THRESHOLD &&
-              (!best ||
+              (
+                !best ||
                 score.score >
-                  best.score.score)
+                  best.score.score
+              )
             ) {
               best = {
                 score,
@@ -1709,7 +1951,8 @@ async function resolveAshby(
           await fetchJson(
             url,
             {},
-            5000
+            5000,
+            0
           );
 
         if (
@@ -1758,10 +2001,16 @@ async function resolveAshby(
               "",
 
             minSalary:
-              null,
+              numberValue(
+                job.compensation
+                  ?.minSalary
+              ),
 
             maxSalary:
-              null,
+              numberValue(
+                job.compensation
+                  ?.maxSalary
+              ),
           };
 
           const confidence =
@@ -1785,9 +2034,11 @@ async function resolveAshby(
           if (
             score.score >=
               PROVIDER_MATCH_THRESHOLD &&
-            (!best ||
+            (
+              !best ||
               score.score >
-                best.score.score)
+                best.score.score
+            )
           ) {
             best = {
               score,
@@ -1863,17 +2114,6 @@ async function resolveAshby(
  * =========================================================
  * SMARTRECRUITERS
  * =========================================================
- *
- * FUTURE-PROOFING:
- *
- * The old version only inspected the first 5 results.
- *
- * SmartRecruiters officially supports paginated postings
- * with limit/offset.
- *
- * We now walk multiple pages and inspect every relevant
- * candidate returned by the company endpoint.
- * =========================================================
  */
 
 async function resolveSmartRecruiters(
@@ -1883,7 +2123,7 @@ async function resolveSmartRecruiters(
   const attempts =
     identifiers.map(
       async (identifier) => {
-        const candidates = [];
+        const postings = [];
 
         const MAX_PAGES = 10;
         const LIMIT = 100;
@@ -1896,19 +2136,24 @@ async function resolveSmartRecruiters(
           const offset =
             page * LIMIT;
 
+          const query =
+            sourceJob.requestedTitle ||
+            sourceJob.title ||
+            "";
+
           const searchUrl =
             `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
               identifier
             )}/postings?limit=${LIMIT}&offset=${offset}&q=${encodeURIComponent(
-              sourceJob.requestedTitle ||
-                sourceJob.title
+              query
             )}`;
 
           const listResult =
             await fetchJson(
               searchUrl,
               {},
-              5000
+              5000,
+              0
             );
 
           if (
@@ -1921,7 +2166,7 @@ async function resolveSmartRecruiters(
             break;
           }
 
-          candidates.push(
+          postings.push(
             ...listResult.data.content
           );
 
@@ -1950,7 +2195,7 @@ async function resolveSmartRecruiters(
         }
 
         /*
-         * De-duplicate posting IDs.
+         * De-duplicate postings.
          */
 
         const unique =
@@ -1958,22 +2203,74 @@ async function resolveSmartRecruiters(
 
         for (
           const posting
-          of candidates
+          of postings
         ) {
+          const key =
+            String(
+              posting?.id ||
+              posting?.uuid ||
+              posting?.ref ||
+              ""
+            );
+
           if (
-            posting?.id &&
-            !unique.has(
-              String(
-                posting.id
-              )
-            )
+            key &&
+            !unique.has(key)
           ) {
             unique.set(
-              String(
-                posting.id
-              ),
+              key,
               posting
             );
+          }
+        }
+
+        /*
+         * If the title query returned nothing, perform one
+         * company-only fallback request.
+         */
+
+        if (!unique.size) {
+          const fallbackUrl =
+            `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
+              identifier
+            )}/postings?limit=100&offset=0`;
+
+          const fallbackResult =
+            await fetchJson(
+              fallbackUrl,
+              {},
+              5000,
+              0
+            );
+
+          if (
+            fallbackResult.ok &&
+            fallbackResult.data &&
+            Array.isArray(
+              fallbackResult.data.content
+            )
+          ) {
+            for (
+              const posting
+              of fallbackResult.data.content
+            ) {
+              const key =
+                String(
+                  posting?.id ||
+                  posting?.uuid ||
+                  ""
+                );
+
+              if (
+                key &&
+                !unique.has(key)
+              ) {
+                unique.set(
+                  key,
+                  posting
+                );
+              }
+            }
           }
         }
 
@@ -1982,155 +2279,148 @@ async function resolveSmartRecruiters(
             unique.values()
           );
 
+        let best = null;
+
         /*
-         * Fetch detailed posting data.
+         * Only inspect the most relevant candidates.
+         *
+         * This prevents unnecessary detail requests.
          */
 
-        const detailAttempts =
-          postingCandidates.map(
-            async (posting) => {
-              if (!posting.id) {
-                return null;
-              }
+        for (
+          const posting
+          of postingCandidates.slice(
+            0,
+            30
+          )
+        ) {
+          if (!posting?.id) {
+            continue;
+          }
 
-              const detailUrl =
-                `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
-                  identifier
-                )}/postings/${encodeURIComponent(
-                  posting.id
-                )}`;
+          const detailUrl =
+            `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(
+              identifier
+            )}/postings/${encodeURIComponent(
+              posting.id
+            )}`;
 
-              const detailResult =
-                await fetchJson(
-                  detailUrl,
-                  {},
-                  5000
-                );
+          const detailResult =
+            await fetchJson(
+              detailUrl,
+              {},
+              5000,
+              0
+            );
 
-              if (
-                !detailResult.ok ||
-                !detailResult.data
-              ) {
-                return null;
-              }
+          if (
+            !detailResult.ok ||
+            !detailResult.data
+          ) {
+            continue;
+          }
 
-              const detail =
-                detailResult.data;
+          const detail =
+            detailResult.data;
 
-              const candidate = {
-                title:
-                  detail.name ||
-                  detail.jobAd
-                    ?.sections
-                    ?.jobTitle
-                    ?.text ||
-                  posting.name ||
-                  "",
+          const candidate = {
+            title:
+              detail.name ||
+              posting.name ||
+              "",
 
-                location: [
-                  detail.location
-                    ?.city,
+            location: [
+              detail.location?.city,
+              detail.location?.region,
+              detail.location?.country,
+            ]
+              .filter(Boolean)
+              .join(", "),
 
-                  detail.location
-                    ?.region,
+            description:
+              detail.jobAd
+                ?.sections
+                ?.jobDescription
+                ?.text ||
+              "",
 
-                  detail.location
-                    ?.country,
-                ]
-                  .filter(Boolean)
-                  .join(", "),
+            minSalary:
+              null,
 
-                description:
-                  detail.jobAd
-                    ?.sections
-                    ?.jobDescription
-                    ?.text ||
-                  "",
+            maxSalary:
+              null,
+          };
 
-                minSalary:
-                  null,
+          const confidence =
+            normalizeCompany(
+              identifier
+            ) ===
+            normalizeCompany(
+              sourceJob.companySlug ||
+                ""
+            )
+              ? 1
+              : 0.9;
 
-                maxSalary:
-                  null,
-              };
+          const score =
+            scoreProviderJob(
+              sourceJob,
+              candidate,
+              confidence
+            );
 
-              const confidence =
-                normalizeCompany(
-                  identifier
-                ) ===
-                normalizeCompany(
-                  sourceJob.companySlug ||
-                    ""
-                )
-                  ? 1
-                  : 0.9;
+          if (
+            score.score <
+            PROVIDER_MATCH_THRESHOLD
+          ) {
+            continue;
+          }
 
-              const score =
-                scoreProviderJob(
-                  sourceJob,
-                  candidate,
-                  confidence
-                );
+          const applicationUrl =
+            detail.applyUrl ||
+            posting.applyUrl ||
+            "";
 
-              if (
-                score.score <
-                PROVIDER_MATCH_THRESHOLD
-              ) {
-                return null;
-              }
+          if (
+            !isHttpUrl(
+              applicationUrl
+            )
+          ) {
+            continue;
+          }
 
-              const applicationUrl =
-                detail.applyUrl ||
-                posting.applyUrl ||
-                "";
+          const result = {
+            provider:
+              "smartrecruiters",
 
-              if (
-                !isHttpUrl(
-                  applicationUrl
-                )
-              ) {
-                return null;
-              }
+            method:
+              "smartrecruiters-public-posting-api",
 
-              return {
-                provider:
-                  "smartrecruiters",
+            applicationUrl,
 
-                method:
-                  "smartrecruiters-public-posting-api",
+            matchedJob: {
+              title:
+                candidate.title,
 
-                applicationUrl,
+              location:
+                candidate.location,
+            },
 
-                matchedJob: {
-                  title:
-                    candidate.title,
+            score,
 
-                  location:
-                    candidate.location,
-                },
+            identifier,
+          };
 
-                score,
+          if (
+            !best ||
+            result.score.score >
+              best.score.score
+          ) {
+            best = result;
+          }
+        }
 
-                identifier,
-              };
-            }
-          );
-
-        const results =
-          await Promise.all(
-            detailAttempts
-          );
-
-        return (
-          results
-            .filter(Boolean)
-            .sort(
-              (a, b) =>
-                b.score.score -
-                a.score.score
-            )[0] ||
-          null
-        );
+        return best;
       }
     );
 
@@ -2155,7 +2445,8 @@ async function resolveSmartRecruiters(
 /*
  * =========================================================
  * WORKABLE
- * ========================================================= */
+ * =========================================================
+ */
 
 async function resolveWorkable(
   sourceJob,
@@ -2173,7 +2464,8 @@ async function resolveWorkable(
           await fetchJson(
             url,
             {},
-            5000
+            5000,
+            0
           );
 
         if (
@@ -2221,14 +2513,16 @@ async function resolveWorkable(
               "",
 
             minSalary:
-              job.salary
-                ?.salary_from ??
-              null,
+              numberValue(
+                job.salary
+                  ?.salary_from
+              ),
 
             maxSalary:
-              job.salary
-                ?.salary_to ??
-              null,
+              numberValue(
+                job.salary
+                  ?.salary_to
+              ),
           };
 
           const confidence =
@@ -2252,9 +2546,11 @@ async function resolveWorkable(
           if (
             score.score >=
               PROVIDER_MATCH_THRESHOLD &&
-            (!best ||
+            (
+              !best ||
               score.score >
-                best.score.score)
+                best.score.score
+            )
           ) {
             best = {
               score,
@@ -2293,7 +2589,9 @@ async function resolveWorkable(
 
           matchedJob: {
             title:
-              best.job.title,
+              best.job.title ||
+              best.job.full_title ||
+              "",
 
             location:
               best.job.location
@@ -2331,7 +2629,8 @@ async function resolveWorkable(
 /*
  * =========================================================
  * RECRUITEE
- * ========================================================= */
+ * =========================================================
+ */
 
 async function resolveRecruitee(
   sourceJob,
@@ -2349,7 +2648,8 @@ async function resolveRecruitee(
           await fetchJson(
             url,
             {},
-            5000
+            5000,
+            0
           );
 
         if (
@@ -2440,9 +2740,11 @@ async function resolveRecruitee(
           if (
             score.score >=
               PROVIDER_MATCH_THRESHOLD &&
-            (!best ||
+            (
+              !best ||
               score.score >
-                best.score.score)
+                best.score.score
+            )
           ) {
             best = {
               score,
@@ -2487,8 +2789,20 @@ async function resolveRecruitee(
               "",
 
             location:
-              best.offer.location ||
-              "",
+              Array.isArray(
+                best.offer.locations
+              )
+                ? best.offer.locations
+                    .map(
+                      (location) =>
+                        location?.name ||
+                        location?.city ||
+                        location?.country ||
+                        ""
+                    )
+                    .join(", ")
+                : best.offer.location ||
+                  "",
           },
 
           score:
@@ -2520,8 +2834,9 @@ async function resolveRecruitee(
 
 /*
  * =========================================================
- * UNIVERSAL PROVIDER RESOLUTION
- * ========================================================= */
+ * UNIVERSAL ATS RESOLUTION
+ * =========================================================
+ */
 
 async function resolveUniversal(
   sourceJob,
@@ -2535,42 +2850,48 @@ async function resolveUniversal(
 
   const providers = [
     {
-      name: "greenhouse",
+      name:
+        "greenhouse",
 
       resolve:
         resolveGreenhouse,
     },
 
     {
-      name: "lever",
+      name:
+        "lever",
 
       resolve:
         resolveLever,
     },
 
     {
-      name: "ashby",
+      name:
+        "ashby",
 
       resolve:
         resolveAshby,
     },
 
     {
-      name: "smartrecruiters",
+      name:
+        "smartrecruiters",
 
       resolve:
         resolveSmartRecruiters,
     },
 
     {
-      name: "workable",
+      name:
+        "workable",
 
       resolve:
         resolveWorkable,
     },
 
     {
-      name: "recruitee",
+      name:
+        "recruitee",
 
       resolve:
         resolveRecruitee,
@@ -2626,7 +2947,8 @@ async function resolveUniversal(
 /*
  * =========================================================
  * MAIN HANDLER
- * ========================================================= */
+ * =========================================================
+ */
 
 export default async function handler(
   req,
@@ -2732,45 +3054,56 @@ export default async function handler(
 
     /*
      * =====================================================
-     * HIMALAYAS SOURCE-JOB LOOKUP
+     * REQUEST OVERRIDES
+     * =====================================================
+     *
+     * These are optional.
+     *
+     * Normal Workivo usage does not need them.
+     */
+
+    const requestedTitle =
+      req.query?.title ||
+      slugData.requestedTitle;
+
+    const requestedCompany =
+      req.query?.company ||
+      companyNameFromSlug(
+        slugData.companySlug
+      );
+
+
+    /*
+     * =====================================================
+     * HIMALAYAS SOURCE LOOKUP
+     * =====================================================
+     *
+     * IMPORTANT:
+     *
+     * Failure here is NO LONGER FATAL.
+     *
+     * We still continue to ATS resolution using the URL
+     * itself as the source of the title/company.
      * =====================================================
      */
 
-    const himalayasJob =
-      await getHimalayasJob(
-        slugData.companySlug,
-        slugData.jobSlug
+    let himalayasJob = null;
+
+    try {
+      himalayasJob =
+        await getHimalayasJob(
+          slugData.companySlug,
+          slugData.jobSlug,
+          requestedTitle
+        );
+    } catch (error) {
+      console.error(
+        "Himalayas lookup failed:",
+        error?.message ||
+          "unknown error"
       );
 
-    if (!himalayasJob) {
-      return sendJson(
-        res,
-        200,
-        {
-          originalUrl,
-
-          finalUrl:
-            originalUrl,
-
-          applyUrl:
-            originalUrl,
-
-          resolved:
-            false,
-
-          method:
-            "fallback-himalayas-job-not-found",
-
-          companySlug:
-            slugData.companySlug,
-
-          jobSlug:
-            slugData.jobSlug,
-
-          requestedTitle:
-            slugData.requestedTitle,
-        }
-      );
+      himalayasJob = null;
     }
 
 
@@ -2779,74 +3112,79 @@ export default async function handler(
      * BUILD SOURCE JOB
      * =====================================================
      *
-     * We deliberately preserve:
+     * If Himalayas lookup succeeded:
      *
-     * requestedTitle
-     *      ↓
-     * original URL-derived title
+     *   use its full data.
      *
-     * title
-     *      ↓
-     * Himalayas API title
+     * If it failed:
      *
-     * This is critical for cases like YipitData.
+     *   use URL-derived title/company.
+     *
+     * This is the major reliability improvement.
      * =====================================================
      */
+
+    const sourceLookupAvailable =
+      Boolean(
+        himalayasJob
+      );
 
     const sourceJob = {
       company:
         req.query?.company ||
-        himalayasJob.companyName ||
+        himalayasJob?.companyName ||
+        requestedCompany ||
         "",
 
       title:
         req.query?.title ||
-        himalayasJob.title ||
+        himalayasJob?.title ||
+        requestedTitle ||
         "",
 
       requestedTitle:
-        slugData.requestedTitle ||
+        requestedTitle ||
         "",
 
       companySlug:
-        himalayasJob.companySlug ||
+        himalayasJob?.companySlug ||
         slugData.companySlug,
 
       description:
-        himalayasJob.description ||
-        himalayasJob.excerpt ||
+        himalayasJob?.description ||
+        himalayasJob?.excerpt ||
         "",
 
       employmentType:
         req.query?.employmentType ||
-        himalayasJob.employmentType ||
+        himalayasJob?.employmentType ||
         "",
 
       minSalary:
         numberValue(
           req.query?.minSalary ??
-            himalayasJob.minSalary
+            himalayasJob?.minSalary
         ),
 
       maxSalary:
         numberValue(
           req.query?.maxSalary ??
-            himalayasJob.maxSalary
+            himalayasJob?.maxSalary
         ),
 
       currency:
         req.query?.currency ||
-        himalayasJob.currency ||
+        himalayasJob?.currency ||
         "",
 
       salaryPeriod:
         req.query?.salaryPeriod ||
-        himalayasJob.salaryPeriod ||
+        himalayasJob?.salaryPeriod ||
         "",
 
       locationRestrictions:
         Array.isArray(
-          himalayasJob.locationRestrictions
+          himalayasJob?.locationRestrictions
         )
           ? himalayasJob.locationRestrictions
           : [],
@@ -2963,6 +3301,9 @@ export default async function handler(
 
             salaryPeriod:
               sourceJob.salaryPeriod,
+
+            himalayasLookup:
+              sourceLookupAvailable,
           },
         }
       );
@@ -2972,6 +3313,16 @@ export default async function handler(
     /*
      * =====================================================
      * SAFE FALLBACK
+     * =====================================================
+     *
+     * IMPORTANT:
+     *
+     * "Himalayas job not found" is deliberately NOT used
+     * here anymore.
+     *
+     * If we reach this point, the resolver has actually
+     * checked the ATS providers and simply did not find a
+     * sufficiently verified direct application URL.
      * =====================================================
      */
 
@@ -3017,6 +3368,9 @@ export default async function handler(
 
           salaryPeriod:
             sourceJob.salaryPeriod,
+
+          himalayasLookup:
+            sourceLookupAvailable,
         },
 
         checkedProviders: [
