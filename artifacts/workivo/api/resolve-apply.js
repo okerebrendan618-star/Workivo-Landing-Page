@@ -306,18 +306,10 @@ function locationMatches(
       providerLocation
     );
 
-  /*
-   * If Himalayas did not provide a restriction,
-   * location should not disqualify a match.
-   */
   if (!restrictions.length) {
     return true;
   }
 
-  /*
-   * A remote provider posting can represent
-   * multiple countries without listing them individually.
-   */
   if (
     location.includes("remote") ||
     location.includes("worldwide") ||
@@ -365,13 +357,6 @@ function salaryMatches(
   sourceJob,
   providerJob
 ) {
-  /*
-   * Salary is supplementary evidence.
-   *
-   * We do NOT require salary because many ATS APIs
-   * don't expose compensation.
-   */
-
   if (
     sourceJob.minSalary === null &&
     sourceJob.maxSalary === null
@@ -385,11 +370,6 @@ function salaryMatches(
   ) {
     return true;
   }
-
-  /*
-   * If both sides have salary information,
-   * compare overlapping ranges.
-   */
 
   const sourceMin =
     numberValue(sourceJob.minSalary);
@@ -427,8 +407,6 @@ function salaryMatches(
  * =========================================================
  * FETCH WITH TIMEOUT
  * =========================================================
- *
- * A resolver cannot sit forever waiting for an ATS.
  */
 
 async function fetchWithTimeout(
@@ -548,12 +526,26 @@ function extractHimalayasJob(
  * HIMALAYAS STRUCTURED API
  * =========================================================
  *
- * We use the public API instead of scraping the page.
+ * IMPORTANT CHANGE:
  *
- * Himalayas documents companySlug as the canonical
- * company identifier and exposes title, company,
- * salary, employment type, location restrictions,
- * description and applicationLink.
+ * Himalayas now recommends cursor pagination.
+ *
+ * A company can have more than 20 jobs.
+ *
+ * Example:
+ *
+ * YipitData → 64 jobs
+ *
+ * The API returns only 20 jobs per request.
+ *
+ * We therefore continue using nextCursor until:
+ *
+ * 1. The requested job is found
+ * 2. There is no nextCursor
+ * 3. A safety page limit is reached
+ *
+ * This prevents valid jobs from being incorrectly
+ * classified as "himalayas-job-not-found".
  *
  * =========================================================
  */
@@ -562,111 +554,228 @@ async function getHimalayasJob(
   companySlug,
   jobSlug
 ) {
+  /*
+   * Convert the URL slug into the likely title.
+   *
+   * Example:
+   *
+   * ai-product-manager-5205658339
+   *
+   * becomes:
+   *
+   * ai product manager
+   *
+   * The trailing numeric ID is NOT part of the title.
+   */
+
   const titleQuery =
-    jobSlug
+    String(jobSlug || "")
       .replace(/[-_]+/g, " ")
+      .replace(/\s+\d{5,}$/g, "")
       .trim();
 
-  const endpoint =
-    "https://himalayas.app/jobs/api/search?" +
-    new URLSearchParams({
-      company:
-        companySlug,
-
-      q:
-        titleQuery,
-
-      page:
-        "1",
-    }).toString();
-
-  const result =
-    await fetchJson(
-      endpoint,
-      {},
-      5000
+  const normalizedTargetTitle =
+    normalizeTitle(
+      titleQuery
     );
 
-  if (
-    !result.ok ||
-    !result.data ||
-    !Array.isArray(
-      result.data.jobs
-    )
+  /*
+   * Himalayas currently returns 20 jobs per page.
+   *
+   * Eight pages is a safety limit.
+   *
+   * This is enough for normal company feeds while
+   * preventing an accidental infinite pagination loop.
+   */
+
+  const MAX_PAGES = 8;
+
+  let cursor = null;
+
+  /*
+   * Keep track of cursors we have already used.
+   *
+   * If the API ever accidentally gives us the same cursor,
+   * we stop safely instead of looping forever.
+   */
+
+  const seenCursors = new Set();
+
+  for (
+    let page = 0;
+    page < MAX_PAGES;
+    page++
   ) {
-    return null;
-  }
+    /*
+     * Build the company feed request.
+     *
+     * We intentionally use the company filter instead of
+     * relying on q=title because the title query can fail
+     * when the Himalayas slug contains a numeric job ID.
+     */
 
-  const jobs =
-    result.data.jobs;
+    const params =
+      new URLSearchParams({
+        company:
+          companySlug,
 
-  /*
-   * First preference:
-   * exact title match.
-   */
+        page:
+          "1",
+      });
 
-  const exact =
-    jobs.find(
-      (job) =>
-        normalizeTitle(
-          job.title
-        ) ===
-        normalizeTitle(
-          titleQuery
-        )
-    );
+    /*
+     * Cursor is only added after the first page.
+     */
 
-  if (exact) {
-    return exact;
-  }
+    if (cursor) {
+      params.set(
+        "cursor",
+        cursor
+      );
+    }
 
-  /*
-   * Second preference:
-   * strongest title similarity.
-   */
+    const endpoint =
+      "https://himalayas.app/jobs/api/search?" +
+      params.toString();
 
-  let best = null;
-  let bestScore = 0;
+    /*
+     * Keep the Himalayas request bounded.
+     */
 
-  for (const job of jobs) {
-    const score =
-      titleSimilarity(
-        job.title,
-        titleQuery
+    const result =
+      await fetchJson(
+        endpoint,
+        {},
+        5000
       );
 
-    if (score > bestScore) {
-      bestScore = score;
-      best = job;
+    if (
+      !result.ok ||
+      !result.data ||
+      !Array.isArray(
+        result.data.jobs
+      )
+    ) {
+      return null;
     }
+
+    const jobs =
+      result.data.jobs;
+
+    /*
+     * =====================================================
+     * 1. EXACT TITLE MATCH
+     * =====================================================
+     *
+     * This should catch:
+     *
+     * "Software Engineer, Benchmarking"
+     *
+     * against the corresponding URL slug.
+     */
+
+    const exact =
+      jobs.find(
+        (job) =>
+          normalizeTitle(
+            job.title
+          ) ===
+          normalizedTargetTitle
+      );
+
+    if (exact) {
+      return exact;
+    }
+
+    /*
+     * =====================================================
+     * 2. STRONG TITLE MATCH
+     * =====================================================
+     *
+     * We calculate the strongest candidate on this page.
+     */
+
+    let best = null;
+    let bestScore = 0;
+
+    for (const job of jobs) {
+      const score =
+        titleSimilarity(
+          job.title,
+          titleQuery
+        );
+
+      if (
+        score > bestScore
+      ) {
+        bestScore = score;
+        best = job;
+      }
+    }
+
+    /*
+     * A strong title match is sufficient.
+     */
+
+    if (
+      best &&
+      bestScore >= 0.65
+    ) {
+      return best;
+    }
+
+    /*
+     * =====================================================
+     * 3. CURSOR PAGINATION
+     * =====================================================
+     *
+     * If the job wasn't on this page, ask Himalayas for
+     * the next page using nextCursor.
+     */
+
+    const nextCursor =
+      result.data.nextCursor;
+
+    /*
+     * No next page means the job genuinely wasn't found
+     * in the company's public feed.
+     */
+
+    if (!nextCursor) {
+      break;
+    }
+
+    /*
+     * Protect against an API returning the same cursor.
+     */
+
+    if (
+      seenCursors.has(
+        nextCursor
+      )
+    ) {
+      break;
+    }
+
+    seenCursors.add(
+      nextCursor
+    );
+
+    cursor =
+      nextCursor;
   }
 
-  return bestScore >= 0.65
-    ? best
-    : null;
+  /*
+   * The job was not found after all available/safe pages.
+   */
+
+  return null;
 }
 
 
 /*
  * =========================================================
  * COMPANY IDENTIFIER CANDIDATES
- * =========================================================
- *
- * ATS platforms use different company identifiers.
- *
- * We try several deterministic forms instead of assuming
- * one universal naming convention.
- *
- * Example:
- *
- * "Epoch AI"
- *
- * may become:
- *
- * epoch-ai
- * epochai
- * epoch
- *
  * =========================================================
  */
 
@@ -721,11 +830,6 @@ function companyIdentifiers(
   add(compactSlug);
   add(compactName);
 
-  /*
-   * Try the first meaningful company word
-   * for cases where the ATS board uses a short brand name.
-   */
-
   const firstWord =
     normalizeCompany(
       companyName
@@ -744,25 +848,6 @@ function companyIdentifiers(
  * =========================================================
  * PROVIDER MATCH SCORING
  * =========================================================
- *
- * We need strong evidence.
- *
- * TITLE:
- *       most important
- *
- * LOCATION:
- *       important when available
- *
- * DESCRIPTION:
- *       secondary confirmation
- *
- * SALARY:
- *       additional confirmation
- *
- * PROVIDER IDENTIFIER:
- *       confirms that the queried ATS board belongs
- *       to the company we are resolving
- * =========================================================
  */
 
 function scoreProviderJob(
@@ -776,9 +861,6 @@ function scoreProviderJob(
       providerJob.title
     );
 
-  /*
-   * A weak title match should NEVER resolve.
-   */
   if (titleScore < 0.78) {
     return {
       score: 0,
@@ -802,12 +884,6 @@ function scoreProviderJob(
       sourceRestrictions,
       providerLocation
     );
-
-  /*
-   * If the source explicitly restricts locations
-   * and the provider contradicts that location,
-   * reject the job.
-   */
 
   if (
     sourceRestrictions.length &&
@@ -844,10 +920,6 @@ function scoreProviderJob(
       ? 1
       : 0;
 
-  /*
-   * Strong weighted score.
-   */
-
   const score =
     titleScore * 0.60 +
     locationScore * 0.15 +
@@ -873,13 +945,6 @@ function scoreProviderJob(
 /*
  * =========================================================
  * GREENHOUSE
- * =========================================================
- *
- * Greenhouse's public Job Board API does not require
- * authentication for GET requests.
- *
- * It exposes published jobs and absolute_url.
- *
  * =========================================================
  */
 
@@ -1014,13 +1079,6 @@ async function resolveGreenhouse(
 /*
  * =========================================================
  * LEVER
- * =========================================================
- *
- * Lever's public postings API exposes published jobs,
- * including hostedUrl and applyUrl.
- *
- * We test both global and EU API hosts.
- *
  * =========================================================
  */
 
@@ -1184,11 +1242,6 @@ async function resolveLever(
  * =========================================================
  * ASHBY
  * =========================================================
- *
- * Ashby's public Job Postings API exposes jobUrl and
- * applyUrl.
- *
- * =========================================================
  */
 
 async function resolveAshby(
@@ -1345,11 +1398,6 @@ async function resolveAshby(
  * =========================================================
  * SMARTRECRUITERS
  * =========================================================
- *
- * SmartRecruiters' Posting API provides public posting
- * data and an applyUrl on the detailed posting object.
- *
- * =========================================================
  */
 
 async function resolveSmartRecruiters(
@@ -1382,11 +1430,6 @@ async function resolveSmartRecruiters(
         ) {
           return null;
         }
-
-        /*
-         * Only inspect a small number of candidates.
-         * This keeps the resolver fast.
-         */
 
         const candidates =
           listResult.data.content
@@ -1545,11 +1588,6 @@ async function resolveSmartRecruiters(
 /*
  * =========================================================
  * WORKABLE
- * =========================================================
- *
- * Workable provides public careers endpoints for published
- * job information.
- *
  * =========================================================
  */
 
@@ -1710,17 +1748,6 @@ async function resolveWorkable(
  * =========================================================
  * RECRUITEE
  * =========================================================
- *
- * Recruitee exposes published offers through its careers
- * site API.
- *
- * Some Recruitee accounts may require a Careers Site API
- * token depending on their current configuration.
- *
- * If the public endpoint rejects the request, we simply
- * skip the provider.
- *
- * =========================================================
  */
 
 async function resolveRecruitee(
@@ -1834,10 +1861,6 @@ async function resolveRecruitee(
           return null;
         }
 
-        /*
-         * Prefer an application/careers URL returned by
-         * Recruitee itself.
-         */
         const applicationUrl =
           best.offer.careers_url ||
           best.offer.careersUrl ||
@@ -1846,10 +1869,6 @@ async function resolveRecruitee(
           best.offer.applyUrl ||
           "";
 
-        /*
-         * If Recruitee did not return an application URL,
-         * do NOT invent one.
-         */
         if (!applicationUrl) {
           return null;
         }
@@ -1920,12 +1939,6 @@ async function resolveUniversal(
       companySlug
     );
 
-  /*
-   * Provider order.
-   *
-   * These are public job-data systems where possible.
-   */
-
   const providers = [
     {
       name: "greenhouse",
@@ -1964,13 +1977,6 @@ async function resolveUniversal(
     },
   ];
 
-  /*
-   * Run provider discovery in parallel.
-   *
-   * This prevents a slow provider from forcing the whole
-   * resolver to wait before checking the others.
-   */
-
   const results =
     await Promise.all(
       providers.map(
@@ -1998,9 +2004,6 @@ async function resolveUniversal(
     return null;
   }
 
-  /*
-   * Choose the strongest verified provider match.
-   */
   matches.sort(
     (a, b) =>
       b.score.score -
@@ -2021,9 +2024,6 @@ export default async function handler(
   req,
   res
 ) {
-  /*
-   * OPTIONS
-   */
   if (req.method === "OPTIONS") {
     return sendJson(
       res,
@@ -2032,9 +2032,6 @@ export default async function handler(
     );
   }
 
-  /*
-   * GET ONLY
-   */
   if (req.method !== "GET") {
     return sendJson(
       res,
@@ -2047,12 +2044,6 @@ export default async function handler(
   }
 
   try {
-    /*
-     * -----------------------------------------------------
-     * 1. GET ORIGINAL HIMALAYAS URL
-     * -----------------------------------------------------
-     */
-
     const originalUrl =
       req.query?.url;
 
@@ -2089,12 +2080,6 @@ export default async function handler(
       );
     }
 
-    /*
-     * -----------------------------------------------------
-     * 2. PARSE HIMALAYAS JOB
-     * -----------------------------------------------------
-     */
-
     const slugData =
       extractHimalayasJob(
         originalUrl
@@ -2122,9 +2107,11 @@ export default async function handler(
     }
 
     /*
-     * -----------------------------------------------------
-     * 3. GET STRUCTURED HIMALAYAS JOB DATA
-     * -----------------------------------------------------
+     * =====================================================
+     * HIMALAYAS LOOKUP
+     *
+     * NOW USES CURSOR PAGINATION.
+     * =====================================================
      */
 
     const himalayasJob =
@@ -2159,12 +2146,6 @@ export default async function handler(
         }
       );
     }
-
-    /*
-     * -----------------------------------------------------
-     * 4. BUILD CANONICAL SOURCE JOB
-     * -----------------------------------------------------
-     */
 
     const sourceJob = {
       company:
@@ -2217,24 +2198,12 @@ export default async function handler(
           : [],
     };
 
-    /*
-     * -----------------------------------------------------
-     * 5. UNIVERSAL ATS RESOLUTION
-     * -----------------------------------------------------
-     */
-
     const resolved =
       await resolveUniversal(
         sourceJob,
         himalayasJob.companySlug ||
           slugData.companySlug
       );
-
-    /*
-     * -----------------------------------------------------
-     * 6. SUCCESS
-     * -----------------------------------------------------
-     */
 
     if (
       resolved &&
@@ -2325,21 +2294,6 @@ export default async function handler(
         }
       );
     }
-
-    /*
-     * -----------------------------------------------------
-     * 7. SAFE FALLBACK
-     * -----------------------------------------------------
-     *
-     * This is VERY important.
-     *
-     * We do NOT guess.
-     *
-     * We do NOT construct random employer URLs.
-     *
-     * We send the user back to the original Himalayas
-     * application page if no public ATS match is verified.
-     */
 
     return sendJson(
       res,
