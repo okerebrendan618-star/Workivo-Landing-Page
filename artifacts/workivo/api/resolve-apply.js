@@ -8,10 +8,20 @@ const HIMALAYAS_HOSTS = new Set([
   "www.himalayas.app",
 ]);
 
+/*
+ * ---------------------------------------------------------
+ * BASIC HELPERS
+ * ---------------------------------------------------------
+ */
+
 function isHttpUrl(value) {
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
+
+    return (
+      url.protocol === "http:" ||
+      url.protocol === "https:"
+    );
   } catch {
     return false;
   }
@@ -20,7 +30,10 @@ function isHttpUrl(value) {
 function isHimalayasUrl(value) {
   try {
     const url = new URL(value);
-    return HIMALAYAS_HOSTS.has(url.hostname.toLowerCase());
+
+    return HIMALAYAS_HOSTS.has(
+      url.hostname.toLowerCase()
+    );
   } catch {
     return false;
   }
@@ -33,118 +46,90 @@ function normalize(value = "") {
     .replace(/&amp;/g, "&")
     .replace(/&#39;|&#x27;/g, "'")
     .replace(/&quot;/g, '"')
-    .replace(/[^a-z0-9$€£./:-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function normalizeCountry(value = "") {
-  const country = normalize(value);
-
-  const aliases = {
-    norway: "norway",
-    japan: "japan",
-    turkey: "turkey",
-    france: "france",
-    mexico: "mexico",
-    vietnam: "vietnam",
-  };
-
-  return aliases[country] || country;
 }
 
 function normalizeCompany(value = "") {
   return normalize(value)
     .replace(/[^a-z0-9]/g, "")
     .replace(/inc$/, "")
-    .replace(/llc$/, "");
+    .replace(/llc$/, "")
+    .replace(/ltd$/, "");
 }
 
 function normalizeTitle(value = "") {
   return normalize(value)
-    .replace(/\b(analyst|specialist|evaluator)\b/g, (word) => word)
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCountry(value = "") {
+  return normalize(value)
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim();
+}
+
+function normalizeLanguage(value = "") {
+  return normalize(value)
+    .replace(/[^a-z0-9\s-]/g, "")
     .trim();
 }
 
 function numberValue(value) {
-  if (value === null || value === undefined || value === "") {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
     return null;
   }
 
   const number = Number(value);
 
-  return Number.isFinite(number) ? number : null;
+  return Number.isFinite(number)
+    ? number
+    : null;
 }
 
-function arraysContainValue(values, expected) {
-  if (!expected) return true;
+function numbersEqual(a, b) {
+  const first = numberValue(a);
+  const second = numberValue(b);
 
-  if (!Array.isArray(values)) {
+  if (first === null || second === null) {
     return false;
   }
 
-  const wanted = normalizeCountry(expected);
-
-  return values.some(
-    (value) => normalizeCountry(value) === wanted
-  );
-}
-
-function titleMatches(actual, expected) {
-  const a = normalizeTitle(actual);
-  const b = normalizeTitle(expected);
-
-  if (!a || !b) return false;
-
-  if (a === b) return true;
-
-  /*
-   * Allows small naming differences such as:
-   * AI Response Evaluator
-   * AI Response Evaluation Analyst
-   */
-  const aWords = new Set(a.split(" "));
-  const bWords = new Set(b.split(" "));
-
-  let matches = 0;
-
-  for (const word of aWords) {
-    if (bWords.has(word)) {
-      matches++;
-    }
-  }
-
-  const denominator = Math.max(aWords.size, bWords.size);
-
-  return denominator > 0 && matches / denominator >= 0.65;
-}
-
-function companyMatches(actual, expected) {
-  return (
-    normalizeCompany(actual) ===
-    normalizeCompany(expected)
-  );
+  return first === second;
 }
 
 /*
  * ---------------------------------------------------------
- * VERIFIED SOURCE RECORDS
+ * VERIFIED APPLICATION RECORDS
  * ---------------------------------------------------------
  *
- * These are NOT guesses.
+ * IMPORTANT:
  *
- * A record is only used when the supplied job metadata matches
- * the verified job fingerprint.
+ * These are exact, manually verified fingerprints.
  *
- * This is deliberately conservative.
+ * We DO NOT guess these.
+ * We DO NOT generate Scholars IDs.
+ * We DO NOT assume all iMerit jobs use Scholars.
+ *
+ * A record is only used when the incoming job fingerprint
+ * matches the verified record.
  */
+
 const VERIFIED_APPLICATIONS = [
   {
-    id: "imerit-norway-ai-response-evaluation-analyst",
+    id:
+      "imerit-ai-response-evaluation-analyst-norway-bokmal",
 
     company: "iMerit",
 
-    title: "AI Response Evaluation Analyst",
+    title:
+      "AI Response Evaluation Analyst",
 
     location: "Norway",
 
@@ -168,102 +153,225 @@ const VERIFIED_APPLICATIONS = [
     source: "iMerit Careers",
 
     method: "verified-employer-source",
-
-    /*
-     * Extra identifiers make the match safer.
-     */
-    requiredDescriptionTerms: [
-      "AI-generated responses",
-      "image",
-      "accuracy",
-      "relevance",
-      "Bokmål",
-    ],
   },
 ];
 
-function descriptionMatches(description, requiredTerms = []) {
-  if (!requiredTerms.length) {
+/*
+ * ---------------------------------------------------------
+ * MATCHING
+ * ---------------------------------------------------------
+ */
+
+function companyMatches(actual, expected) {
+  if (!actual || !expected) {
+    return false;
+  }
+
+  return (
+    normalizeCompany(actual) ===
+    normalizeCompany(expected)
+  );
+}
+
+function titleMatches(actual, expected) {
+  if (!actual || !expected) {
+    return false;
+  }
+
+  const a = normalizeTitle(actual);
+  const b = normalizeTitle(expected);
+
+  if (!a || !b) {
+    return false;
+  }
+
+  /*
+   * Exact title match.
+   */
+  if (a === b) {
     return true;
   }
 
-  const text = normalize(description);
+  /*
+   * Controlled fallback for small naming differences.
+   *
+   * Example:
+   *
+   * "AI Response Evaluation Analyst"
+   * "AI Response Evaluation Specialist"
+   *
+   * We still require a strong word overlap.
+   */
+
+  const aWords = new Set(a.split(" "));
+  const bWords = new Set(b.split(" "));
 
   let matches = 0;
 
-  for (const term of requiredTerms) {
-    if (text.includes(normalize(term))) {
+  for (const word of aWords) {
+    if (bWords.has(word)) {
       matches++;
     }
   }
 
-  /*
-   * Require most of the fingerprint to match.
-   */
-  return matches >= Math.ceil(requiredTerms.length * 0.6);
+  const denominator = Math.max(
+    aWords.size,
+    bWords.size
+  );
+
+  return (
+    denominator > 0 &&
+    matches / denominator >= 0.8
+  );
 }
 
-function matchesVerifiedApplication(job, record) {
-  if (!companyMatches(job.company, record.company)) {
+function locationMatches(actual, expected) {
+  if (!actual || !expected) {
     return false;
   }
 
-  if (!titleMatches(job.title, record.title)) {
+  return (
+    normalizeCountry(actual) ===
+    normalizeCountry(expected)
+  );
+}
+
+function languageMatches(actual, expected) {
+  if (!actual || !expected) {
     return false;
   }
 
+  return (
+    normalizeLanguage(actual) ===
+    normalizeLanguage(expected)
+  );
+}
+
+function employmentTypeMatches(actual, expected) {
+  if (!actual || !expected) {
+    return false;
+  }
+
+  return (
+    normalize(actual) ===
+    normalize(expected)
+  );
+}
+
+/*
+ * ---------------------------------------------------------
+ * FINGERPRINT MATCH
+ * ---------------------------------------------------------
+ *
+ * REQUIRED FIELDS:
+ *
+ * company
+ * title
+ * location
+ * language
+ * employmentType
+ * durationWeeks
+ * salary
+ * currency
+ * salaryPeriod
+ *
+ * We intentionally require the important identifying fields.
+ *
+ * This prevents:
+ *
+ * iMerit + similar title
+ *
+ * from accidentally becoming:
+ *
+ * Scholars 655
+ */
+
+function matchesVerifiedApplication(
+  job,
+  record
+) {
   if (
-    job.location &&
-    !arraysContainValue([job.location], record.location)
-  ) {
-    return false;
-  }
-
-  if (
-    job.language &&
-    normalize(job.language) !== normalize(record.language)
-  ) {
-    return false;
-  }
-
-  if (
-    job.employmentType &&
-    normalize(job.employmentType) !==
-      normalize(record.employmentType)
-  ) {
-    return false;
-  }
-
-  const salary = numberValue(job.minSalary);
-
-  if (
-    salary !== null &&
-    record.minSalary !== null &&
-    salary !== record.minSalary
-  ) {
-    return false;
-  }
-
-  if (
-    job.currency &&
-    normalize(job.currency) !== normalize(record.currency)
-  ) {
-    return false;
-  }
-
-  if (
-    job.salaryPeriod &&
-    normalize(job.salaryPeriod) !==
-      normalize(record.salaryPeriod)
-  ) {
-    return false;
-  }
-
-  if (
-    !descriptionMatches(
-      job.description,
-      record.requiredDescriptionTerms
+    !companyMatches(
+      job.company,
+      record.company
     )
+  ) {
+    return false;
+  }
+
+  if (
+    !titleMatches(
+      job.title,
+      record.title
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !locationMatches(
+      job.location,
+      record.location
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !languageMatches(
+      job.language,
+      record.language
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !employmentTypeMatches(
+      job.employmentType,
+      record.employmentType
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !numbersEqual(
+      job.durationWeeks,
+      record.durationWeeks
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !numbersEqual(
+      job.minSalary,
+      record.minSalary
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    !numbersEqual(
+      job.maxSalary,
+      record.maxSalary
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    normalize(job.currency) !==
+    normalize(record.currency)
+  ) {
+    return false;
+  }
+
+  if (
+    normalize(job.salaryPeriod) !==
+    normalize(record.salaryPeriod)
   ) {
     return false;
   }
@@ -271,259 +379,361 @@ function matchesVerifiedApplication(job, record) {
   return true;
 }
 
-function extractJobSlug(url) {
-  try {
-    const parsed = new URL(url);
+/*
+ * ---------------------------------------------------------
+ * DEBUGGING
+ * ---------------------------------------------------------
+ *
+ * Instead of simply saying "no match", this tells us
+ * exactly which fingerprint fields were missing.
+ */
 
-    const match = parsed.pathname.match(
-      /^\/companies\/([^/]+)\/jobs\/([^/]+)\/?$/i
-    );
+function getMissingFingerprintFields(job) {
+  const missing = [];
 
-    if (!match) {
-      return null;
-    }
-
-    return {
-      companySlug: decodeURIComponent(match[1]),
-      jobSlug: decodeURIComponent(match[2]),
-    };
-  } catch {
-    return null;
+  if (!job.company) {
+    missing.push("company");
   }
+
+  if (!job.title) {
+    missing.push("title");
+  }
+
+  if (!job.location) {
+    missing.push("location");
+  }
+
+  if (!job.language) {
+    missing.push("language");
+  }
+
+  if (!job.employmentType) {
+    missing.push("employmentType");
+  }
+
+  if (
+    job.durationWeeks === null ||
+    job.durationWeeks === undefined ||
+    job.durationWeeks === ""
+  ) {
+    missing.push("durationWeeks");
+  }
+
+  if (
+    job.minSalary === null ||
+    job.minSalary === undefined ||
+    job.minSalary === ""
+  ) {
+    missing.push("minSalary");
+  }
+
+  if (!job.currency) {
+    missing.push("currency");
+  }
+
+  if (!job.salaryPeriod) {
+    missing.push("salaryPeriod");
+  }
+
+  return missing;
 }
 
-async function getHimalayasJob(companySlug, jobSlug) {
-  /*
-   * We use Himalayas' public structured API.
-   *
-   * We are NOT scraping the Himalayas webpage.
-   */
-  const endpoint =
-    "https://himalayas.app/jobs/api/search?" +
-    new URLSearchParams({
-      company: companySlug,
-      q: jobSlug.replace(/[-_]+/g, " "),
-      page: "1",
-    }).toString();
+/*
+ * ---------------------------------------------------------
+ * FIND VERIFIED APPLICATION
+ * ---------------------------------------------------------
+ */
 
-  const response = await fetch(endpoint, {
-    headers: {
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Himalayas API returned ${response.status}`
-    );
-  }
-
-  const data = await response.json();
-
-  if (!Array.isArray(data.jobs)) {
-    return null;
-  }
-
-  /*
-   * Find the closest title match.
-   */
-  const wantedTitle = jobSlug
-    .replace(/[-_]+/g, " ");
-
-  const exact = data.jobs.find((job) =>
-    titleMatches(job.title, wantedTitle)
-  );
-
-  return exact || data.jobs[0] || null;
-}
-
-async function resolveApplication(job) {
+function resolveApplication(job) {
   for (const record of VERIFIED_APPLICATIONS) {
-    if (matchesVerifiedApplication(job, record)) {
-      return {
-        resolved: true,
-        applyUrl: record.applicationUrl,
-        method: record.method,
-        source: record.source,
-        verificationId: record.id,
-      };
+    if (
+      matchesVerifiedApplication(
+        job,
+        record
+      )
+    ) {
+      return record;
     }
   }
 
   return null;
 }
 
-export default async function handler(req, res) {
+/*
+ * ---------------------------------------------------------
+ * MAIN HANDLER
+ * ---------------------------------------------------------
+ */
+
+export default async function handler(
+  req,
+  res
+) {
+  /*
+   * CORS / preflight
+   */
   if (req.method === "OPTIONS") {
-    return res.status(200).json({});
+    return res
+      .status(200)
+      .json({});
   }
 
+  /*
+   * Only GET is supported.
+   */
   if (req.method !== "GET") {
-    return res.status(405).json({
-      error: "Method not allowed",
-    });
+    return res
+      .status(405)
+      .json({
+        error: "Method not allowed",
+      });
   }
 
   try {
-    const originalUrl = req.query?.url;
+    /*
+     * -----------------------------------------------------
+     * ORIGINAL HIMALAYAS URL
+     * -----------------------------------------------------
+     */
+
+    const originalUrl =
+      req.query?.url;
 
     if (!originalUrl) {
-      return res.status(400).json({
-        error: "Missing url parameter",
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            "Missing url parameter",
+        });
     }
 
     if (!isHttpUrl(originalUrl)) {
-      return res.status(400).json({
-        error: "Invalid URL",
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            "Invalid URL",
+        });
     }
 
     if (!isHimalayasUrl(originalUrl)) {
-      return res.status(400).json({
-        error: "Only Himalayas URLs are supported",
-      });
-    }
-
-    const slugData = extractJobSlug(originalUrl);
-
-    if (!slugData) {
-      return res.status(200).json({
-        originalUrl,
-        finalUrl: originalUrl,
-        applyUrl: originalUrl,
-        resolved: false,
-        method: "fallback-invalid-himalayas-url",
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            "Only Himalayas URLs are supported",
+        });
     }
 
     /*
-     * Get structured job data from Himalayas API.
-     */
-    const himalayasJob = await getHimalayasJob(
-      slugData.companySlug,
-      slugData.jobSlug
-    );
-
-    if (!himalayasJob) {
-      return res.status(200).json({
-        originalUrl,
-        finalUrl: originalUrl,
-        applyUrl: originalUrl,
-        resolved: false,
-        method: "fallback-job-not-found",
-      });
-    }
-
-    /*
-     * For now, location/language/duration are supplied by the
-     * caller when available.
+     * -----------------------------------------------------
+     * READ JOB FINGERPRINT
+     * -----------------------------------------------------
      *
-     * The public Himalayas API gives us location restrictions,
-     * salary, employment type and description.
+     * These values come from Workivo.
+     *
+     * The resolver DOES NOT try to discover them by taking
+     * the first location from Himalayas.
      */
+
     const job = {
-      company: himalayasJob.companyName,
-      title: himalayasJob.title,
+      company:
+        req.query?.company || "",
+
+      title:
+        req.query?.title || "",
 
       location:
-        Array.isArray(himalayasJob.locationRestrictions) &&
-        himalayasJob.locationRestrictions.length
-          ? himalayasJob.locationRestrictions[0]
-          : "",
+        req.query?.location || "",
 
-      employmentType:
-        himalayasJob.employmentType || "",
-
-      minSalary:
-        himalayasJob.minSalary,
-
-      maxSalary:
-        himalayasJob.maxSalary,
-
-      currency:
-        himalayasJob.currency || "",
-
-      salaryPeriod:
-        himalayasJob.salaryPeriod || "",
-
-      description:
-        himalayasJob.description || "",
-
-      /*
-       * Optional values can be passed by Workivo later.
-       */
       language:
         req.query?.language || "",
 
+      employmentType:
+        req.query?.employmentType || "",
+
       durationWeeks:
         req.query?.durationWeeks
-          ? Number(req.query.durationWeeks)
+          ? Number(
+              req.query.durationWeeks
+            )
           : null,
+
+      minSalary:
+        req.query?.minSalary
+          ? Number(
+              req.query.minSalary
+            )
+          : null,
+
+      maxSalary:
+        req.query?.maxSalary
+          ? Number(
+              req.query.maxSalary
+            )
+          : null,
+
+      currency:
+        req.query?.currency || "",
+
+      salaryPeriod:
+        req.query?.salaryPeriod || "",
     };
 
-    const resolved = await resolveApplication(job);
+    /*
+     * -----------------------------------------------------
+     * CHECK WHETHER WE HAVE ENOUGH INFORMATION
+     * -----------------------------------------------------
+     */
 
-    if (resolved) {
-      return res.status(200).json({
-        originalUrl,
+    const missingFields =
+      getMissingFingerprintFields(
+        job
+      );
 
-        finalUrl: resolved.applyUrl,
+    /*
+     * We don't attempt a guess.
+     *
+     * If important identifying information is missing,
+     * safely fall back to Himalayas.
+     */
 
-        applyUrl: resolved.applyUrl,
+    if (missingFields.length > 0) {
+      return res
+        .status(200)
+        .json({
+          originalUrl,
 
-        resolved: true,
+          finalUrl:
+            originalUrl,
 
-        method: resolved.method,
+          applyUrl:
+            originalUrl,
 
-        source: resolved.source,
+          resolved: false,
 
-        verificationId: resolved.verificationId,
+          method:
+            "fallback-missing-fingerprint",
 
-        matchedJob: {
-          company: job.company,
-          title: job.title,
-          location: job.location,
-          employmentType: job.employmentType,
-          minSalary: job.minSalary,
-          maxSalary: job.maxSalary,
-          currency: job.currency,
-          salaryPeriod: job.salaryPeriod,
-        },
-      });
+          missingFingerprintFields:
+            missingFields,
+
+          matchedJob: job,
+        });
     }
 
     /*
-     * SAFE FALLBACK
-     *
-     * Never send the user to an unverified application URL.
+     * -----------------------------------------------------
+     * TRY VERIFIED APPLICATION MATCH
+     * -----------------------------------------------------
      */
-    return res.status(200).json({
-      originalUrl,
 
-      finalUrl: originalUrl,
+    const resolved =
+      resolveApplication(job);
 
-      applyUrl: originalUrl,
+    if (resolved) {
+      return res
+        .status(200)
+        .json({
+          originalUrl,
 
-      resolved: false,
+          finalUrl:
+            resolved.applicationUrl,
 
-      method: "fallback-unverified-source",
+          applyUrl:
+            resolved.applicationUrl,
 
-      matchedJob: {
-        company: job.company,
-        title: job.title,
-        location: job.location,
-      },
-    });
+          resolved: true,
+
+          method:
+            resolved.method,
+
+          source:
+            resolved.source,
+
+          verificationId:
+            resolved.id,
+
+          matchedJob: {
+            company:
+              job.company,
+
+            title:
+              job.title,
+
+            location:
+              job.location,
+
+            language:
+              job.language,
+
+            employmentType:
+              job.employmentType,
+
+            durationWeeks:
+              job.durationWeeks,
+
+            minSalary:
+              job.minSalary,
+
+            maxSalary:
+              job.maxSalary,
+
+            currency:
+              job.currency,
+
+            salaryPeriod:
+              job.salaryPeriod,
+          },
+        });
+    }
+
+    /*
+     * -----------------------------------------------------
+     * SAFE FALLBACK
+     * -----------------------------------------------------
+     *
+     * If we don't have a verified mapping:
+     *
+     * DO NOT GUESS.
+     *
+     * Keep the original Himalayas application URL.
+     */
+
+    return res
+      .status(200)
+      .json({
+        originalUrl,
+
+        finalUrl:
+          originalUrl,
+
+        applyUrl:
+          originalUrl,
+
+        resolved: false,
+
+        method:
+          "fallback-unverified-fingerprint",
+
+        matchedJob: job,
+      });
   } catch (error) {
-    console.error("resolve-apply error:", error);
+    console.error(
+      "resolve-apply error:",
+      error
+    );
 
-    return res.status(500).json({
-      error: "Resolver failed",
+    return res
+      .status(500)
+      .json({
+        error:
+          "Resolver failed",
 
-      message:
-        error?.message ||
-        "Unknown resolver error",
-    });
+        message:
+          error?.message ||
+          "Unknown resolver error",
+      });
   }
 }
