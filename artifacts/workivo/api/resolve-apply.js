@@ -3851,6 +3851,8 @@ export default async function handler(
       );
 
     const sourceJob = {
+      url:
+  originalUrl,
       company:
         req.query?.company ||
         himalayasJob?.companyName ||
