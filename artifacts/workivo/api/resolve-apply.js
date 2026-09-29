@@ -13,43 +13,40 @@ const HIMALAYAS_HOSTS = new Set([
  * WORKIVO GREENHOUSE-VERIFIED APPLICATION RESOLVER
  * =========================================================
  *
- * LAUNCH FLOW
+ * Greenhouse is the ONLY enabled provider.
+ *
+ * Accepted flow:
  *
  * Himalayas Job
  *      ↓
- * Extract company + title
- *      ↓
  * Himalayas source lookup
  *      ↓
- * Discover Greenhouse application evidence
+ * Greenhouse evidence discovery
  *      ↓
- * Build Greenhouse board identifiers
+ * Known Greenhouse board token?
  *      ↓
- * Greenhouse public board API
+ * Known Greenhouse job ID?
  *      ↓
- * Verify exact job where possible
+ * Exact Greenhouse verification
  *      ↓
- * Score returned Greenhouse jobs
+ * Stop immediately if verified
  *      ↓
- * Verified Greenhouse job?
- *      ↓                 ↓
- *     YES               NO
- *      ↓                 ↓
- * Greenhouse URL       resolved:false
+ * Otherwise controlled fallback board search
+ *      ↓
+ * Strict title/location verification
+ *      ↓
+ * Greenhouse API absolute_url
  *
+ * IMPORTANT:
  *
- * IMPORTANT
- *
- * - Greenhouse is the ONLY enabled provider.
- * - No Lever.
- * - No Ashby.
- * - No SmartRecruiters.
- * - No Workable.
- * - No Recruitee.
- * - No Himalayas fallback application URL.
- * - No guessed application URLs.
- * - No hardcoded company job IDs.
- * - Greenhouse URL must come from Greenhouse's API.
+ * - No Lever
+ * - No Ashby
+ * - No SmartRecruiters
+ * - No Workable
+ * - No Recruitee
+ * - No Himalayas fallback application URL
+ * - No guessed application URLs
+ * - No hardcoded Greenhouse job IDs
  *
  * =========================================================
  */
@@ -65,21 +62,33 @@ const HIMALAYAS_TITLE_SEARCH_MAX_PAGES = 5;
 const HIMALAYAS_COMPANY_SEARCH_MAX_PAGES = 12;
 const HIMALAYAS_BROAD_SEARCH_MAX_PAGES = 3;
 
-const PROVIDER_MATCH_THRESHOLD = 0.78;
+/*
+ * Normal Greenhouse matching is intentionally strict.
+ */
+const PROVIDER_MATCH_THRESHOLD = 0.82;
+
+/*
+ * Exact Greenhouse ID verification has its own title
+ * threshold because the ID itself is already very strong
+ * evidence.
+ */
+const EXACT_GREENHOUSE_TITLE_THRESHOLD = 0.85;
 
 const FETCH_TIMEOUT_MS = 5000;
 
+/*
+ * Maximum number of guessed Greenhouse board identifiers
+ * after stronger evidence has failed.
+ */
 const MAX_COMPANY_IDENTIFIERS = 12;
+const GREENHOUSE_FALLBACK_IDENTIFIER_LIMIT = 4;
 
 /*
- * Controlled Greenhouse retry/search depth.
- *
- * Greenhouse's public Job Board API returns the published
- * jobs for a board. These extra attempts are defensive and
- * mainly help when a board response behaves differently
- * across environments.
+ * Known/evidence-backed board searches can inspect more
+ * pages than guessed identifiers.
  */
 const GREENHOUSE_MAX_PAGES = 3;
+const GREENHOUSE_FALLBACK_MAX_PAGES = 3;
 
 
 /*
@@ -177,15 +186,12 @@ function isGreenhouseUrl(value) {
  * GREENHOUSE LINK EXTRACTION
  * =========================================================
  *
- * IMPORTANT:
+ * We never trust a Greenhouse-looking URL as the final
+ * application URL.
  *
- * We do NOT return a Himalayas applicationLink directly.
+ * It is evidence only.
  *
- * We only use a Greenhouse applicationLink as evidence to
- * identify the Greenhouse board token and, when available,
- * the exact Greenhouse job ID.
- *
- * The final URL still has to come from Greenhouse's API.
+ * Final applyUrl MUST come from Greenhouse's API.
  * =========================================================
  */
 
@@ -208,20 +214,16 @@ function extractGreenhouseApplicationEvidence(
       parsed.pathname
         .split("/")
         .filter(Boolean)
-        .map((part) =>
-          decodeURIComponent(part)
-        );
+        .map((part) => {
+          try {
+            return decodeURIComponent(part);
+          } catch {
+            return part;
+          }
+        });
 
     let boardToken = "";
     let jobId = "";
-
-    /*
-     * Standard Greenhouse hosted board:
-     *
-     * boards.greenhouse.io/company/jobs/123
-     *
-     * job-boards.greenhouse.io/company/jobs/123
-     */
 
     if (
       hostname === "boards.greenhouse.io" ||
@@ -233,9 +235,7 @@ function extractGreenhouseApplicationEvidence(
             part.toLowerCase() === "jobs"
         );
 
-      if (
-        jobsIndex > 0
-      ) {
+      if (jobsIndex > 0) {
         boardToken =
           pathParts[jobsIndex - 1] || "";
 
@@ -244,45 +244,26 @@ function extractGreenhouseApplicationEvidence(
       }
     }
 
-    /*
-     * Greenhouse-powered external careers pages can use:
-     *
-     * ?gh_jid=123456
-     */
-
     if (!jobId) {
       jobId =
         parsed.searchParams.get(
           "gh_jid"
-        ) ||
-        parsed.searchParams.get(
-          "gh_jid"
-        ) ||
-        "";
+        ) || "";
     }
-
-    /*
-     * Some Greenhouse URLs expose the board token in the
-     * path even when the exact /jobs/ structure differs.
-     */
 
     if (
       !boardToken &&
       pathParts.length >= 1
     ) {
-      const possibleJobsIndex =
+      const jobsIndex =
         pathParts.findIndex(
           (part) =>
             part.toLowerCase() === "jobs"
         );
 
-      if (
-        possibleJobsIndex > 0
-      ) {
+      if (jobsIndex > 0) {
         boardToken =
-          pathParts[
-            possibleJobsIndex - 1
-          ] || "";
+          pathParts[jobsIndex - 1] || "";
       }
     }
 
@@ -304,6 +285,125 @@ function extractGreenhouseApplicationEvidence(
 
 /*
  * =========================================================
+ * GREENHOUSE EVIDENCE FROM HIMALAYAS HTML
+ * =========================================================
+ *
+ * This is only a discovery fallback.
+ *
+ * We inspect the Himalayas page when the Himalayas API did
+ * not expose a usable Greenhouse applicationLink.
+ *
+ * We ONLY extract Greenhouse evidence.
+ *
+ * We NEVER return a discovered URL directly to the user.
+ * =========================================================
+ */
+
+async function discoverGreenhouseEvidenceFromHimalayasPage(
+  originalUrl
+) {
+  if (!isHimalayasUrl(originalUrl)) {
+    return null;
+  }
+
+  try {
+    const response =
+      await fetchWithTimeout(
+        originalUrl,
+        {
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml",
+          },
+        },
+        6000
+      );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    let html =
+      await response.text();
+
+    if (!html) {
+      return null;
+    }
+
+    /*
+     * Normalize common HTML/JSON escaping.
+     */
+    html = html
+      .replace(/\\\//g, "/")
+      .replace(/&amp;/gi, "&")
+      .replace(/\\u002F/gi, "/");
+
+    /*
+     * Look specifically for hosted Greenhouse board URLs.
+     */
+    const greenhouseUrlMatches =
+      html.match(
+        /https?:\/\/(?:boards|job-boards)\.greenhouse\.io\/[^"'<>\\\s]+/gi
+      ) || [];
+
+    for (
+      const candidateUrl
+      of greenhouseUrlMatches
+    ) {
+      const cleanedUrl =
+        candidateUrl
+          .replace(
+            /[),.;]+$/,
+            ""
+          );
+
+      const evidence =
+        extractGreenhouseApplicationEvidence(
+          cleanedUrl
+        );
+
+      if (
+        evidence &&
+        (
+          evidence.boardToken ||
+          evidence.jobId
+        )
+      ) {
+        return evidence;
+      }
+    }
+
+    /*
+     * Some pages may contain escaped Greenhouse paths
+     * without a complete absolute URL.
+     *
+     * We only use them when both the Greenhouse board
+     * domain and job structure are clearly present.
+     */
+    const greenhousePathMatch =
+      html.match(
+        /(?:boards|job-boards)\.greenhouse\.io\/([^"'<>\\\s]+?)(?:\/jobs\/(\d+))/i
+      );
+
+    if (greenhousePathMatch) {
+      return {
+        applicationLink: "",
+        boardToken:
+          greenhousePathMatch[1] || "",
+        jobId:
+          greenhousePathMatch[2] || "",
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+
+/*
+ * =========================================================
  * NORMALIZATION
  * =========================================================
  */
@@ -316,7 +416,10 @@ function normalize(value = "") {
     .replace(/&#39;|&#x27;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&#x2F;|&#47;/g, "/")
-    .replace(/[^\p{L}\p{N}\s$€£./:-]+/gu, " ")
+    .replace(
+      /[^\p{L}\p{N}\s$€£./:-]+/gu,
+      " "
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -337,17 +440,6 @@ function normalizeCompany(value = "") {
  * =========================================================
  * TITLE NORMALIZATION
  * =========================================================
- *
- * IMPORTANT CHANGE:
- *
- * Software Engineer I
- * Software Engineer 1
- *
- * now normalize to the same representation.
- *
- * This helps titles where Greenhouse/Himalayas use
- * different numbering conventions.
- * =========================================================
  */
 
 function normalizeTitle(value = "") {
@@ -359,35 +451,35 @@ function normalizeTitle(value = "") {
       );
 
   /*
-   * Roman numeral job levels.
+   * Convert standalone Roman numeral job levels.
    *
-   * Only convert standalone level numerals so we don't
-   * accidentally modify ordinary words.
+   * Software Engineer I
+   * Software Engineer 1
+   *
+   * become equivalent.
    */
-
   title =
-    title
-      .replace(
-        /\b(viii|vii|vi|iv|iii|ii|i)\b/gi,
-        (match) => {
-          const map = {
-            i: "1",
-            ii: "2",
-            iii: "3",
-            iv: "4",
-            v: "5",
-            vi: "6",
-            vii: "7",
-            viii: "8",
-          };
+    title.replace(
+      /\b(viii|vii|vi|iv|iii|ii|i)\b/gi,
+      (match) => {
+        const map = {
+          i: "1",
+          ii: "2",
+          iii: "3",
+          iv: "4",
+          v: "5",
+          vi: "6",
+          vii: "7",
+          viii: "8",
+        };
 
-          return (
-            map[
-              match.toLowerCase()
-            ] || match
-          );
-        }
-      );
+        return (
+          map[
+            match.toLowerCase()
+          ] || match
+        );
+      }
+    );
 
   return title
     .replace(
@@ -401,7 +493,10 @@ function normalizeTitle(value = "") {
 
 function normalizeLocation(value = "") {
   return normalize(value)
-    .replace(/[^a-z0-9\s,-]+/g, " ")
+    .replace(
+      /[^a-z0-9\s,-]+/g,
+      " "
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -488,9 +583,199 @@ const STOP_WORDS = new Set([
 
 /*
  * =========================================================
- * TOKEN / JACCARD SIMILARITY
+ * TITLE SEMANTIC GROUPS
+ * =========================================================
+ *
+ * These are intentionally conservative.
+ *
+ * They prevent:
+ *
+ * Senior Software Engineer
+ *        from being treated like
+ * Software Engineer
+ *
+ * Backend Software Engineer
+ *        from being treated like
+ * Frontend Software Engineer
+ *
+ * Product Manager
+ *        from being treated like
+ * Product Designer
+ *
  * =========================================================
  */
+
+const TITLE_LEVEL_GROUPS = [
+  new Set([
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+  ]),
+
+  new Set([
+    "junior",
+    "jr",
+    "entry",
+    "associate",
+  ]),
+
+  new Set([
+    "mid",
+    "middle",
+  ]),
+
+  new Set([
+    "senior",
+    "sr",
+  ]),
+
+  new Set([
+    "staff",
+  ]),
+
+  new Set([
+    "principal",
+  ]),
+
+  new Set([
+    "lead",
+  ]),
+
+  new Set([
+    "manager",
+  ]),
+
+  new Set([
+    "director",
+  ]),
+
+  new Set([
+    "head",
+  ]),
+
+  new Set([
+    "vp",
+    "vice",
+    "president",
+  ]),
+
+  new Set([
+    "chief",
+  ]),
+];
+
+
+const TITLE_SPECIALIZATION_GROUPS = [
+  new Set([
+    "backend",
+    "back-end",
+  ]),
+
+  new Set([
+    "frontend",
+    "front-end",
+  ]),
+
+  new Set([
+    "fullstack",
+    "full-stack",
+    "full",
+  ]),
+
+  new Set([
+    "mobile",
+    "ios",
+    "android",
+  ]),
+
+  new Set([
+    "web",
+  ]),
+
+  new Set([
+    "data",
+  ]),
+
+  new Set([
+    "machine",
+    "ml",
+    "ai",
+  ]),
+
+  new Set([
+    "devops",
+    "sre",
+    "platform",
+  ]),
+
+  new Set([
+    "security",
+    "cybersecurity",
+  ]),
+
+  new Set([
+    "cloud",
+  ]),
+
+  new Set([
+    "embedded",
+  ]),
+
+  new Set([
+    "qa",
+    "quality",
+    "test",
+  ]),
+
+  new Set([
+    "product",
+  ]),
+
+  new Set([
+    "design",
+    "designer",
+    "ux",
+    "ui",
+  ]),
+
+  new Set([
+    "sales",
+  ]),
+
+  new Set([
+    "marketing",
+  ]),
+];
+
+
+function titleGroupForTokens(
+  tokens,
+  groups
+) {
+  for (
+    const group
+    of groups
+  ) {
+    for (
+      const token
+      of tokens
+    ) {
+      if (
+        group.has(token)
+      ) {
+        return group;
+      }
+    }
+  }
+
+  return null;
+}
+
 
 function tokenSet(value = "") {
   return new Set(
@@ -512,18 +797,58 @@ function tokenSet(value = "") {
 }
 
 
-function jaccardSimilarity(a, b) {
-  const first = tokenSet(a);
-  const second = tokenSet(b);
+/*
+ * Numeric job levels are only two characters/one token,
+ * so tokenSet() would otherwise filter "1" out.
+ *
+ * This version preserves level tokens.
+ */
+function titleTokenSet(value = "") {
+  return new Set(
+    normalizeTitle(value)
+      .split(/\s+/)
+      .map((word) =>
+        word.replace(
+          /[^a-z0-9]/g,
+          ""
+        )
+      )
+      .filter(
+        (word) =>
+          word &&
+          (
+            word.length > 2 ||
+            /^\d+$/.test(word)
+          ) &&
+          !STOP_WORDS.has(word)
+      )
+  );
+}
 
-  if (!first.size || !second.size) {
+
+function jaccardSimilarity(a, b) {
+  const first =
+    tokenSet(a);
+
+  const second =
+    tokenSet(b);
+
+  if (
+    !first.size ||
+    !second.size
+  ) {
     return 0;
   }
 
   let intersection = 0;
 
-  for (const token of first) {
-    if (second.has(token)) {
+  for (
+    const token
+    of first
+  ) {
+    if (
+      second.has(token)
+    ) {
       intersection++;
     }
   }
@@ -539,44 +864,198 @@ function jaccardSimilarity(a, b) {
 }
 
 
-function titleSimilarity(a, b) {
-  const first = normalizeTitle(a);
-  const second = normalizeTitle(b);
+/*
+ * =========================================================
+ * STRICT TITLE SIMILARITY
+ * =========================================================
+ *
+ * IMPORTANT:
+ *
+ * This replaces the old loose containment rule.
+ *
+ * The old rule could do this:
+ *
+ * "Software Engineer"
+ * "Senior Software Engineer"
+ *
+ * => 0.95
+ *
+ * That is too permissive.
+ *
+ * Now:
+ *
+ * - exact normalized title = 1
+ * - same level + same role family = strong
+ * - missing/extra level = capped
+ * - conflicting levels = rejected
+ * - conflicting specializations = rejected
+ * - different core roles = rejected
+ *
+ * =========================================================
+ */
 
-  if (!first || !second) {
+function titleSimilarity(a, b) {
+  const first =
+    normalizeTitle(a);
+
+  const second =
+    normalizeTitle(b);
+
+  if (
+    !first ||
+    !second
+  ) {
     return 0;
   }
 
-  if (first === second) {
+  if (
+    first === second
+  ) {
     return 1;
   }
 
   const firstTokens =
-    tokenSet(first);
+    titleTokenSet(first);
 
   const secondTokens =
-    tokenSet(second);
+    titleTokenSet(second);
+
+  if (
+    !firstTokens.size ||
+    !secondTokens.size
+  ) {
+    return 0;
+  }
+
+  const firstLevel =
+    titleGroupForTokens(
+      firstTokens,
+      TITLE_LEVEL_GROUPS
+    );
+
+  const secondLevel =
+    titleGroupForTokens(
+      secondTokens,
+      TITLE_LEVEL_GROUPS
+    );
 
   /*
-   * Strong containment rule.
-   *
-   * Example:
-   * "Staff Backend Software Engineer"
-   * vs
-   * "Staff Backend Software Engineer II"
-   *
-   * should remain a very strong match.
+   * If both titles contain a level and they are different,
+   * they are not the same job level.
    */
+  if (
+    firstLevel &&
+    secondLevel &&
+    firstLevel !== secondLevel
+  ) {
+    return 0.25;
+  }
 
-  let shared = 0;
+  /*
+   * If only one title contains a meaningful level,
+   * do not allow it to become a near-exact match.
+   */
+  const levelMismatch =
+    Boolean(
+      firstLevel
+    ) !==
+    Boolean(
+      secondLevel
+    );
 
-  for (const token of firstTokens) {
+  const firstSpecializations =
+    [];
+
+  const secondSpecializations =
+    [];
+
+  for (
+    const group
+    of TITLE_SPECIALIZATION_GROUPS
+  ) {
+    const firstHas =
+      Array.from(
+        firstTokens
+      ).some(
+        (token) =>
+          group.has(token)
+      );
+
+    const secondHas =
+      Array.from(
+        secondTokens
+      ).some(
+        (token) =>
+          group.has(token)
+      );
+
+    if (firstHas) {
+      firstSpecializations.push(
+        group
+      );
+    }
+
+    if (secondHas) {
+      secondSpecializations.push(
+        group
+      );
+    }
+  }
+
+  /*
+   * Detect conflicting specialization families.
+   */
+  if (
+    firstSpecializations.length &&
+    secondSpecializations.length
+  ) {
+    let compatible =
+      false;
+
+    for (
+      const firstGroup
+      of firstSpecializations
+    ) {
+      for (
+        const secondGroup
+        of secondSpecializations
+      ) {
+        if (
+          firstGroup ===
+          secondGroup
+        ) {
+          compatible = true;
+        }
+      }
+    }
+
+    if (!compatible) {
+      return 0.30;
+    }
+  }
+
+  let intersection = 0;
+
+  for (
+    const token
+    of firstTokens
+  ) {
     if (
       secondTokens.has(token)
     ) {
-      shared++;
+      intersection++;
     }
   }
+
+  const union =
+    firstTokens.size +
+    secondTokens.size -
+    intersection;
+
+  const jaccard =
+    union > 0
+      ? intersection / union
+      : 0;
 
   const smallerSize =
     Math.min(
@@ -584,17 +1063,37 @@ function titleSimilarity(a, b) {
       secondTokens.size
     );
 
+  /*
+   * Containment remains useful only when the semantic
+   * groups are compatible.
+   */
   if (
     smallerSize >= 2 &&
-    shared === smallerSize
+    intersection ===
+      smallerSize
   ) {
-    return 0.95;
+    if (
+      levelMismatch
+    ) {
+      return Math.min(
+        0.72,
+        jaccard + 0.25
+      );
+    }
+
+    return 0.94;
   }
 
-  return jaccardSimilarity(
-    first,
-    second
-  );
+  if (
+    levelMismatch
+  ) {
+    return Math.min(
+      jaccard,
+      0.72
+    );
+  }
+
+  return jaccard;
 }
 
 
@@ -604,7 +1103,9 @@ function titleSimilarity(a, b) {
  * =========================================================
  */
 
-function cleanRequestedJobSlug(jobSlug = "") {
+function cleanRequestedJobSlug(
+  jobSlug = ""
+) {
   return slugify(
     String(jobSlug || "")
       .replace(
@@ -624,19 +1125,26 @@ function jobSlugSimilarity(
       requestedJobSlug
     );
 
-  if (!requestedSlug) {
+  if (
+    !requestedSlug
+  ) {
     return 0;
   }
 
   const titleSlug =
-    slugify(job.title || "");
+    slugify(
+      job.title || ""
+    );
 
-  if (!titleSlug) {
+  if (
+    !titleSlug
+  ) {
     return 0;
   }
 
   if (
-    titleSlug === requestedSlug
+    titleSlug ===
+    requestedSlug
   ) {
     return 1;
   }
@@ -691,7 +1199,7 @@ function exactJobTitleMatch(
       job.title || ""
     );
 
-  return (
+  return Boolean(
     requestedSlug &&
     jobTitleSlug &&
     requestedSlug ===
@@ -709,7 +1217,11 @@ function exactJobTitleMatch(
 function normalizeLocationRestrictions(
   restrictions
 ) {
-  if (!Array.isArray(restrictions)) {
+  if (
+    !Array.isArray(
+      restrictions
+    )
+  ) {
     return [];
   }
 
@@ -717,7 +1229,8 @@ function normalizeLocationRestrictions(
     .map((item) => {
       if (
         item &&
-        typeof item === "object"
+        typeof item ===
+          "object"
       ) {
         return (
           item.name ||
@@ -727,9 +1240,13 @@ function normalizeLocationRestrictions(
         );
       }
 
-      return String(item || "");
+      return String(
+        item || ""
+      );
     })
-    .map(normalizeLocation)
+    .map(
+      normalizeLocation
+    )
     .filter(Boolean);
 }
 
@@ -748,19 +1265,30 @@ function locationMatches(
       providerLocation
     );
 
-  if (!restrictions.length) {
-    return true;
-  }
-
   if (
-    location.includes("remote") ||
-    location.includes("worldwide") ||
-    location.includes("anywhere")
+    !restrictions.length
   ) {
     return true;
   }
 
-  for (const restriction of restrictions) {
+  if (
+    location.includes(
+      "remote"
+    ) ||
+    location.includes(
+      "worldwide"
+    ) ||
+    location.includes(
+      "anywhere"
+    )
+  ) {
+    return true;
+  }
+
+  for (
+    const restriction
+    of restrictions
+  ) {
     if (
       restriction &&
       location.includes(
@@ -790,9 +1318,12 @@ function numberValue(value) {
     return null;
   }
 
-  const number = Number(value);
+  const number =
+    Number(value);
 
-  return Number.isFinite(number)
+  return Number.isFinite(
+    number
+  )
     ? number
     : null;
 }
@@ -803,15 +1334,19 @@ function salaryMatches(
   providerJob
 ) {
   if (
-    sourceJob.minSalary === null &&
-    sourceJob.maxSalary === null
+    sourceJob.minSalary ===
+      null &&
+    sourceJob.maxSalary ===
+      null
   ) {
     return true;
   }
 
   if (
-    providerJob.minSalary === null &&
-    providerJob.maxSalary === null
+    providerJob.minSalary ===
+      null &&
+    providerJob.maxSalary ===
+      null
   ) {
     return true;
   }
@@ -844,14 +1379,18 @@ function salaryMatches(
   }
 
   const sourceUpper =
-    sourceMax ?? sourceMin;
+    sourceMax ??
+    sourceMin;
 
   const providerUpper =
-    providerMax ?? providerMin;
+    providerMax ??
+    providerMin;
 
   return (
-    sourceMin <= providerUpper &&
-    providerMin <= sourceUpper
+    sourceMin <=
+      providerUpper &&
+    providerMin <=
+      sourceUpper
   );
 }
 
@@ -863,8 +1402,12 @@ function salaryMatches(
  */
 
 function sleep(ms) {
-  return new Promise((resolve) =>
-    setTimeout(resolve, ms)
+  return new Promise(
+    (resolve) =>
+      setTimeout(
+        resolve,
+        ms
+      )
   );
 }
 
@@ -879,7 +1422,8 @@ async function fetchWithTimeout(
 
   const timer =
     setTimeout(
-      () => controller.abort(),
+      () =>
+        controller.abort(),
       timeoutMs
     );
 
@@ -896,12 +1440,15 @@ async function fetchWithTimeout(
           Accept:
             "application/json",
 
-          ...(options.headers || {}),
+          ...(options.headers ||
+            {}),
         },
       }
     );
   } finally {
-    clearTimeout(timer);
+    clearTimeout(
+      timer
+    );
   }
 }
 
@@ -931,7 +1478,8 @@ async function fetchJson(
         response.status;
 
       if (
-        response.status === 429 &&
+        response.status ===
+          429 &&
         attempt < retries
       ) {
         const retryAfter =
@@ -951,12 +1499,16 @@ async function fetchJson(
               )
             : 400;
 
-        await sleep(waitMs);
+        await sleep(
+          waitMs
+        );
 
         continue;
       }
 
-      if (!response.ok) {
+      if (
+        !response.ok
+      ) {
         return {
           ok: false,
           status:
@@ -978,7 +1530,10 @@ async function fetchJson(
       if (
         attempt < retries
       ) {
-        await sleep(250);
+        await sleep(
+          250
+        );
+
         continue;
       }
     }
@@ -986,7 +1541,8 @@ async function fetchJson(
 
   return {
     ok: false,
-    status: lastStatus,
+    status:
+      lastStatus,
     data: null,
   };
 }
@@ -998,7 +1554,9 @@ async function fetchJson(
  * =========================================================
  */
 
-function extractHimalayasJob(url) {
+function extractHimalayasJob(
+  url
+) {
   try {
     const parsed =
       new URL(url);
@@ -1059,17 +1617,21 @@ function companyMatches(
 
   const jobSlug =
     normalizeCompany(
-      job?.companySlug || ""
+      job?.companySlug ||
+        ""
     );
 
   const jobName =
     normalizeCompany(
-      job?.companyName || ""
+      job?.companyName ||
+        ""
     );
 
   if (
-    requested === jobSlug ||
-    requested === jobName
+    requested ===
+      jobSlug ||
+    requested ===
+      jobName
   ) {
     return true;
   }
@@ -1077,8 +1639,12 @@ function companyMatches(
   if (
     jobSlug &&
     (
-      requested.includes(jobSlug) ||
-      jobSlug.includes(requested)
+      requested.includes(
+        jobSlug
+      ) ||
+      jobSlug.includes(
+        requested
+      )
     )
   ) {
     return true;
@@ -1087,8 +1653,10 @@ function companyMatches(
   return (
     jaccardSimilarity(
       requested,
-      jobSlug || jobName
-    ) >= 0.75
+      jobSlug ||
+        jobName
+    ) >=
+    0.75
   );
 }
 
@@ -1137,14 +1705,16 @@ function scoreHimalayasCandidate(
       jobSlug
     )
   ) {
-    score += 0.15;
+    score +=
+      0.15;
   }
 
   return {
-    score: Math.min(
-      score,
-      1
-    ),
+    score:
+      Math.min(
+        score,
+        1
+      ),
 
     titleScore,
 
@@ -1180,14 +1750,18 @@ async function searchHimalayasPage({
     sort
   );
 
-  if (companySlug) {
+  if (
+    companySlug
+  ) {
     params.set(
       "company",
       companySlug
     );
   }
 
-  if (query) {
+  if (
+    query
+  ) {
     params.set(
       "q",
       query
@@ -1217,11 +1791,16 @@ function buildTitleQueries(
   requestedTitle,
   jobSlug
 ) {
-  const values = [];
+  const values =
+    [];
 
-  function add(value) {
+  function add(
+    value
+  ) {
     const cleaned =
-      normalizeTitle(value);
+      normalizeTitle(
+        value
+      );
 
     if (
       cleaned &&
@@ -1240,7 +1819,9 @@ function buildTitleQueries(
   );
 
   add(
-    String(jobSlug || "")
+    String(
+      jobSlug || ""
+    )
       .replace(
         /[-_]+\d{4,}$/,
         ""
@@ -1252,7 +1833,7 @@ function buildTitleQueries(
   );
 
   const tokens =
-    tokenSet(
+    titleTokenSet(
       requestedTitle
     );
 
@@ -1260,8 +1841,13 @@ function buildTitleQueries(
     tokens.size >= 2
   ) {
     add(
-      Array.from(tokens)
-        .slice(0, 4)
+      Array.from(
+        tokens
+      )
+        .slice(
+          0,
+          4
+        )
         .join(" ")
     );
   }
@@ -1297,7 +1883,8 @@ async function getHimalayasJob(
     return null;
   }
 
-  const allCandidates = [];
+  const allCandidates =
+    [];
 
   const seen =
     new Set();
@@ -1413,7 +2000,7 @@ async function getHimalayasJob(
     for (
       let page = 1;
       page <=
-      HIMALAYAS_TITLE_SEARCH_MAX_PAGES;
+        HIMALAYAS_TITLE_SEARCH_MAX_PAGES;
       page++
     ) {
       const result =
@@ -1469,7 +2056,8 @@ async function getHimalayasJob(
         jobs.length <
           responseLimit ||
         (
-          totalCount !== null &&
+          totalCount !==
+            null &&
           page *
             responseLimit >=
             totalCount
@@ -1489,7 +2077,7 @@ async function getHimalayasJob(
   for (
     let page = 1;
     page <=
-    HIMALAYAS_COMPANY_SEARCH_MAX_PAGES;
+      HIMALAYAS_COMPANY_SEARCH_MAX_PAGES;
     page++
   ) {
     const result =
@@ -1545,7 +2133,8 @@ async function getHimalayasJob(
       jobs.length <
         responseLimit ||
       (
-        totalCount !== null &&
+        totalCount !==
+          null &&
         page *
           responseLimit >=
           totalCount
@@ -1571,7 +2160,7 @@ async function getHimalayasJob(
     for (
       let page = 1;
       page <=
-      HIMALAYAS_BROAD_SEARCH_MAX_PAGES;
+        HIMALAYAS_BROAD_SEARCH_MAX_PAGES;
       page++
     ) {
       const result =
@@ -1634,20 +2223,22 @@ async function getHimalayasJob(
 
   const scored =
     allCandidates
-      .map((job) => ({
-        job,
+      .map(
+        (job) => ({
+          job,
 
-        evidence:
-          scoreHimalayasCandidate(
-            job,
+          evidence:
+            scoreHimalayasCandidate(
+              job,
 
-            requestedTitle,
+              requestedTitle,
 
-            companySlug,
+              companySlug,
 
-            jobSlug
-          ),
-      }))
+              jobSlug
+            ),
+        })
+      )
       .sort(
         (a, b) =>
           b.evidence.score -
@@ -1685,6 +2276,14 @@ async function getHimalayasJob(
  * =========================================================
  * GREENHOUSE COMPANY IDENTIFIERS
  * =========================================================
+ *
+ * Evidence-backed board token goes first.
+ *
+ * The fallback list intentionally does NOT blindly search
+ * every individual company word.
+ *
+ * That reduces false-positive Greenhouse boards.
+ * =========================================================
  */
 
 function companyIdentifiers(
@@ -1692,9 +2291,12 @@ function companyIdentifiers(
   companySlug,
   greenhouseBoardToken = ""
 ) {
-  const values = [];
+  const values =
+    [];
 
-  function add(value) {
+  function add(
+    value
+  ) {
     if (!value) {
       return;
     }
@@ -1722,15 +2324,9 @@ function companyIdentifiers(
 
 
   /*
-   * IMPORTANT:
-   *
-   * If Himalayas already gave us a Greenhouse board token,
-   * put it FIRST.
-   *
-   * This is now the strongest board identifier because it
-   * came from an actual Greenhouse application destination.
+   * STRONGEST:
+   * actual Greenhouse board token discovered from source.
    */
-
   add(
     greenhouseBoardToken
   );
@@ -1738,8 +2334,7 @@ function companyIdentifiers(
 
   const rawSlug =
     String(
-      companySlug ||
-      ""
+      companySlug || ""
     )
       .trim()
       .toLowerCase();
@@ -1747,8 +2342,7 @@ function companyIdentifiers(
 
   const rawName =
     String(
-      companyName ||
-      ""
+      companyName || ""
     )
       .trim()
       .toLowerCase();
@@ -1781,7 +2375,7 @@ function companyIdentifiers(
 
 
   /*
-   * Original identifiers
+   * Strong company-derived identifiers.
    */
 
   add(
@@ -1800,26 +2394,20 @@ function companyIdentifiers(
     compactName
   );
 
-
-  /*
-   * Raw company slug
-   */
-
   add(
     rawSlug
   );
 
 
   /*
-   * Strip common corporate suffixes.
+   * Corporate suffix cleanup.
    */
 
   const withoutCompanySuffix =
-    canonicalSlug
-      .replace(
-        /-(inc|llc|ltd|limited|corp|corporation|company|co|plc)$/i,
-        ""
-      );
+    canonicalSlug.replace(
+      /-(inc|llc|ltd|limited|corp|corporation|company|co|plc)$/i,
+      ""
+    );
 
   add(
     withoutCompanySuffix
@@ -1827,31 +2415,25 @@ function companyIdentifiers(
 
 
   /*
-   * Himalayas "-com" company slugs.
+   * Himalayas "-com" suffix.
    */
 
   const withoutComSuffix =
-    canonicalSlug
-      .replace(
-        /-com$/i,
-        ""
-      );
+    canonicalSlug.replace(
+      /-com$/i,
+      ""
+    );
 
   add(
     withoutComSuffix
   );
 
 
-  /*
-   * Literal ".com".
-   */
-
   const withoutDotCom =
-    rawSlug
-      .replace(
-        /\.com$/i,
-        ""
-      );
+    rawSlug.replace(
+      /\.com$/i,
+      ""
+    );
 
   add(
     withoutDotCom
@@ -1859,39 +2441,12 @@ function companyIdentifiers(
 
 
   /*
-   * Company-name tokens.
+   * Do NOT add every individual company token.
+   *
+   * That old behavior could turn a multi-word company into
+   * unrelated Greenhouse board guesses.
    */
 
-  const companyTokens =
-    normalize(
-      companyName
-    )
-      .split(/\s+/)
-      .map(
-        (token) =>
-          token.replace(
-            /[^a-z0-9]/g,
-            ""
-          )
-      )
-      .filter(
-        (token) =>
-          token.length >= 4
-      );
-
-  for (
-    const token
-    of companyTokens
-  ) {
-    add(
-      token
-    );
-  }
-
-
-  /*
-   * Remove obvious corporate words.
-   */
 
   const filtered =
     values.filter(
@@ -1910,7 +2465,6 @@ function companyIdentifiers(
           value
         )
     );
-
 
   return filtered.slice(
     0,
@@ -1932,15 +2486,11 @@ function scoreProviderJob(
 ) {
   const titleCandidates = [
     sourceJob.requestedTitle,
-
     sourceJob.title,
   ].filter(Boolean);
 
-
   let titleScore = 0;
-
   let matchedTitle = "";
-
 
   for (
     const titleCandidate
@@ -1949,7 +2499,6 @@ function scoreProviderJob(
     const candidateScore =
       titleSimilarity(
         titleCandidate,
-
         providerJob.title
       );
 
@@ -1965,11 +2514,6 @@ function scoreProviderJob(
     }
   }
 
-
-  /*
-   * A Greenhouse job must first be a reasonably strong
-   * title match.
-   */
 
   if (
     titleScore <
@@ -1997,16 +2541,13 @@ function scoreProviderJob(
     sourceJob.locationRestrictions ||
     [];
 
-
   const providerLocation =
     providerJob.location ||
     "";
 
-
   const locationOk =
     locationMatches(
       sourceRestrictions,
-
       providerLocation
     );
 
@@ -2033,13 +2574,6 @@ function scoreProviderJob(
   }
 
 
-  /*
-   * CHANGE:
-   *
-   * Missing provider location is now neutral when the
-   * source job itself has no explicit restrictions.
-   */
-
   const locationScore =
     sourceRestrictions.length
       ? 1
@@ -2047,18 +2581,14 @@ function scoreProviderJob(
 
 
   /*
-   * CHANGE:
-   *
-   * Missing description remains neutral instead of
-   * destroying a strong title match.
+   * Description is now a supporting signal rather than
+   * something capable of destroying a strong title match.
    */
-
   const descriptionScore =
     providerJob.description
       ? jaccardSimilarity(
           sourceJob.description ||
             "",
-
           providerJob.description
         )
       : 0;
@@ -2067,29 +2597,211 @@ function scoreProviderJob(
   const salaryScore =
     salaryMatches(
       sourceJob,
-
       providerJob
     )
       ? 1
       : 0;
 
 
+  /*
+   * Title carries the most weight.
+   *
+   * This is deliberate because Greenhouse frequently has
+   * sparse salary/description information.
+   */
   const score =
-    titleScore * 0.60 +
+    titleScore * 0.70 +
 
     locationScore * 0.15 +
 
     Math.min(
       descriptionScore,
       1
-    ) * 0.10 +
+    ) * 0.05 +
 
     salaryScore * 0.05 +
 
-    identifierConfidence * 0.10;
+    identifierConfidence * 0.05;
 
 
   return {
+    score,
+
+    titleScore,
+
+    locationScore,
+
+    descriptionScore,
+
+    salaryScore,
+
+    identifierConfidence,
+
+    matchedTitle,
+  };
+}
+
+
+/*
+ * =========================================================
+ * EXACT GREENHOUSE VERIFICATION SCORING
+ * =========================================================
+ *
+ * Exact Greenhouse job ID is much stronger than generic
+ * similarity.
+ *
+ * We therefore do NOT force it through the ordinary
+ * weighted score.
+ *
+ * We still verify:
+ *
+ * - title compatibility
+ * - location compatibility
+ *
+ * Missing salary/description does NOT kill exact ID
+ * verification.
+ * =========================================================
+ */
+
+function scoreExactGreenhouseJob(
+  sourceJob,
+  providerJob,
+  identifierConfidence = 1
+) {
+  const titleCandidates = [
+    sourceJob.requestedTitle,
+    sourceJob.title,
+  ].filter(Boolean);
+
+  let titleScore = 0;
+  let matchedTitle = "";
+
+  for (
+    const titleCandidate
+    of titleCandidates
+  ) {
+    const score =
+      titleSimilarity(
+        titleCandidate,
+        providerJob.title
+      );
+
+    if (
+      score >
+      titleScore
+    ) {
+      titleScore =
+        score;
+
+      matchedTitle =
+        titleCandidate;
+    }
+  }
+
+  if (
+    titleScore <
+    EXACT_GREENHOUSE_TITLE_THRESHOLD
+  ) {
+    return {
+      valid: false,
+
+      score: 0,
+
+      titleScore,
+
+      locationScore: 0,
+
+      descriptionScore: 0,
+
+      salaryScore: 0,
+
+      identifierConfidence,
+
+      matchedTitle,
+    };
+  }
+
+
+  const sourceRestrictions =
+    sourceJob.locationRestrictions ||
+    [];
+
+  const locationOk =
+    locationMatches(
+      sourceRestrictions,
+      providerJob.location ||
+        ""
+    );
+
+  if (
+    sourceRestrictions.length &&
+    !locationOk
+  ) {
+    return {
+      valid: false,
+
+      score: 0,
+
+      titleScore,
+
+      locationScore: 0,
+
+      descriptionScore: 0,
+
+      salaryScore: 0,
+
+      identifierConfidence,
+
+      matchedTitle,
+    };
+  }
+
+
+  const locationScore =
+    sourceRestrictions.length
+      ? 1
+      : 0.5;
+
+
+  const descriptionScore =
+    providerJob.description
+      ? jaccardSimilarity(
+          sourceJob.description ||
+            "",
+          providerJob.description
+        )
+      : 0;
+
+
+  const salaryScore =
+    salaryMatches(
+      sourceJob,
+      providerJob
+    )
+      ? 1
+      : 0;
+
+
+  /*
+   * Exact ID itself represents the strongest evidence.
+   * Score remains useful for response metadata only.
+   */
+  const score =
+    titleScore * 0.80 +
+
+    locationScore * 0.15 +
+
+    salaryScore * 0.03 +
+
+    Math.min(
+      descriptionScore,
+      1
+    ) * 0.02;
+
+
+  return {
+    valid: true,
+
     score,
 
     titleScore,
@@ -2138,7 +2850,10 @@ function greenhouseJobIdsMatch(
       requestedJobId
     );
 
-  if (!wanted || !job) {
+  if (
+    !wanted ||
+    !job
+  ) {
     return false;
   }
 
@@ -2168,7 +2883,8 @@ function greenhouseJobIdsMatch(
 
   const absoluteUrl =
     String(
-      job.absolute_url || ""
+      job.absolute_url ||
+        ""
     );
 
   if (
@@ -2222,28 +2938,21 @@ function greenhouseJobIdsMatch(
  * =========================================================
  * GREENHOUSE JOB FETCH
  * =========================================================
- *
- * Greenhouse documents this endpoint as returning the
- * published jobs for a board.
- *
- * We keep the normal request first.
- *
- * Additional page attempts are defensive only and are
- * deduplicated by job ID.
- * =========================================================
  */
 
 async function fetchGreenhouseJobs(
-  identifier
+  identifier,
+  maxPages = GREENHOUSE_MAX_PAGES
 ) {
-  const allJobs = [];
+  const allJobs =
+    [];
 
   const seenIds =
     new Set();
 
   for (
     let page = 1;
-    page <= GREENHOUSE_MAX_PAGES;
+    page <= maxPages;
     page++
   ) {
     const params =
@@ -2253,12 +2962,6 @@ async function fetchGreenhouseJobs(
       "content",
       "true"
     );
-
-    /*
-     * Page is included only for defensive compatibility.
-     * If Greenhouse ignores it, the duplicate jobs are
-     * removed below.
-     */
 
     if (
       page > 1
@@ -2291,11 +2994,6 @@ async function fetchGreenhouseJobs(
         result.data.jobs
       )
     ) {
-      /*
-       * If the first request itself failed, there is no
-       * Greenhouse board under this identifier.
-       */
-
       if (
         page === 1
       ) {
@@ -2309,8 +3007,8 @@ async function fetchGreenhouseJobs(
     const jobs =
       result.data.jobs;
 
-
-    let addedThisPage = 0;
+    let addedThisPage =
+      0;
 
 
     for (
@@ -2348,12 +3046,6 @@ async function fetchGreenhouseJobs(
     }
 
 
-    /*
-     * The normal Greenhouse response is already the complete
-     * published-job list. If a page request returns no new
-     * jobs, stop.
-     */
-
     if (
       !jobs.length ||
       addedThisPage === 0
@@ -2362,11 +3054,6 @@ async function fetchGreenhouseJobs(
     }
 
 
-    /*
-     * If Greenhouse exposes a total count and we've already
-     * reached it, stop.
-     */
-
     const total =
       numberValue(
         result.data?.meta?.total
@@ -2374,20 +3061,19 @@ async function fetchGreenhouseJobs(
 
     if (
       total !== null &&
-      allJobs.length >= total
+      allJobs.length >=
+        total
     ) {
       break;
     }
 
 
     /*
-     * Normal non-paginated response: the first response is
-     * already the board's full list.
+     * Preserve the existing defensive behavior:
+     * a normal short response is considered complete.
      *
-     * Only continue to the defensive page attempt if the
-     * response looks like a large list.
+     * Large responses may justify defensive page checks.
      */
-
     if (
       page === 1 &&
       jobs.length < 100
@@ -2402,17 +3088,209 @@ async function fetchGreenhouseJobs(
 
 /*
  * =========================================================
- * GREENHOUSE
+ * GREENHOUSE CANDIDATE CONVERTER
  * =========================================================
  */
 
-async function resolveGreenhouse(
-  sourceJob,
-  identifiers
+function greenhouseProviderCandidate(
+  job
 ) {
+  return {
+    title:
+      job.title || "",
+
+    location:
+      job.location?.name ||
+      "",
+
+    description:
+      job.content ||
+      job.description ||
+      "",
+
+    minSalary:
+      null,
+
+    maxSalary:
+      null,
+  };
+}
+
+
+/*
+ * =========================================================
+ * GREENHOUSE IDENTIFIER CONFIDENCE
+ * =========================================================
+ */
+
+function getGreenhouseIdentifierConfidence(
+  sourceJob,
+  identifier,
+  isEvidenceBacked = false
+) {
+  if (
+    sourceJob.greenhouseBoardToken &&
+    normalizeCompany(
+      sourceJob.greenhouseBoardToken
+    ) ===
+      normalizeCompany(
+        identifier
+      )
+  ) {
+    return 1;
+  }
+
+  if (
+    isEvidenceBacked
+  ) {
+    return 1;
+  }
+
+  const normalizedIdentifier =
+    normalizeCompany(
+      identifier
+    );
+
+  const normalizedCompanySlug =
+    normalizeCompany(
+      sourceJob.companySlug ||
+        ""
+    );
+
+  const normalizedCompany =
+    normalizeCompany(
+      sourceJob.company ||
+        ""
+    );
+
+  if (
+    normalizedIdentifier ===
+      normalizedCompanySlug ||
+    normalizedIdentifier ===
+      normalizedCompany
+  ) {
+    return 0.90;
+  }
+
+  return 0.75;
+}
+
+
+/*
+ * =========================================================
+ * GREENHOUSE RESULT BUILDER
+ * =========================================================
+ */
+
+function buildGreenhouseResult(
+  sourceJob,
+  job,
+  identifier,
+  score,
+  exactGreenhouseIdMatch
+) {
+  const applicationUrl =
+    typeof job.absolute_url ===
+      "string"
+      ? job.absolute_url.trim()
+      : "";
+
+  if (
+    !applicationUrl ||
+    !isGreenhouseUrl(
+      applicationUrl
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    provider:
+      "greenhouse",
+
+    method:
+      exactGreenhouseIdMatch
+        ? "greenhouse-exact-job-verification"
+        : "greenhouse-public-job-board-api",
+
+    applicationUrl,
+
+    matchedJob: {
+      title:
+        job.title || "",
+
+      location:
+        job.location?.name ||
+        "",
+    },
+
+    score,
+
+    identifier,
+
+    exactGreenhouseIdMatch,
+  };
+}
+
+
+/*
+ * =========================================================
+ * GREENHOUSE BOARD RESOLUTION
+ * =========================================================
+ *
+ * One board at a time.
+ *
+ * This is deliberately sequential.
+ *
+ * We do NOT blast all possible Greenhouse identifiers
+ * simultaneously.
+ * =========================================================
+ */
+
+async function resolveGreenhouseOnBoard(
+  sourceJob,
+  identifier,
+  options = {}
+) {
+  const {
+    evidenceBacked = false,
+    maxPages =
+      GREENHOUSE_MAX_PAGES,
+    allowExactJobId =
+      false,
+  } = options;
+
+
+  const jobs =
+    await fetchGreenhouseJobs(
+      identifier,
+      maxPages
+    );
+
+
+  if (
+    !jobs.length
+  ) {
+    return null;
+  }
+
+
+  const identifierConfidence =
+    getGreenhouseIdentifierConfidence(
+      sourceJob,
+      identifier,
+      evidenceBacked
+    );
+
+
   /*
-   * If Himalayas supplied a Greenhouse application link,
-   * use its exact job ID as high-confidence evidence.
+   * =======================================================
+   * PASS 1
+   * Exact Greenhouse job ID
+   * =======================================================
+   *
+   * Only use the ID as decisive evidence when it came from
+   * a known Greenhouse application destination.
    */
 
   const requestedGreenhouseJobId =
@@ -2421,369 +3299,362 @@ async function resolveGreenhouse(
     );
 
 
-  const attempts =
-    identifiers.map(
-      async (identifier) => {
-        const jobs =
-          await fetchGreenhouseJobs(
-            identifier
-          );
-
-
-        if (
-          !jobs.length
-        ) {
-          return null;
-        }
-
-
-        let best = null;
-
-
-        /*
-         * ===================================================
-         * PASS 1
-         *
-         * Exact Greenhouse job ID match.
-         *
-         * This is the strongest possible match when the
-         * Himalayas listing already supplied a Greenhouse
-         * application destination.
-         * ===================================================
-         */
-
-        if (
+  if (
+    allowExactJobId &&
+    requestedGreenhouseJobId
+  ) {
+    for (
+      const job
+      of jobs
+    ) {
+      if (
+        !greenhouseJobIdsMatch(
+          job,
           requestedGreenhouseJobId
-        ) {
-          for (
-            const job
-            of jobs
-          ) {
-            if (
-              !greenhouseJobIdsMatch(
-                job,
-                requestedGreenhouseJobId
-              )
-            ) {
-              continue;
-            }
-
-
-            const candidate = {
-              title:
-                job.title || "",
-
-              location:
-                job.location?.name ||
-                "",
-
-              description:
-                job.content ||
-                job.description ||
-                "",
-
-              minSalary:
-                null,
-
-              maxSalary:
-                null,
-            };
-
-
-            const normalizedIdentifier =
-              normalizeCompany(
-                identifier
-              );
-
-
-            const normalizedCompanySlug =
-              normalizeCompany(
-                sourceJob.companySlug ||
-                  ""
-              );
-
-
-            const normalizedCompany =
-              normalizeCompany(
-                sourceJob.company ||
-                  ""
-              );
-
-
-            const identifierConfidence =
-              normalizedIdentifier ===
-                normalizedCompanySlug ||
-              normalizedIdentifier ===
-                normalizedCompany
-                ? 1
-                : 0.9;
-
-
-            const score =
-              scoreProviderJob(
-                sourceJob,
-
-                candidate,
-
-                identifierConfidence
-              );
-
-
-            /*
-             * Exact ID match gets a very strong bonus,
-             * but we still require the title/location
-             * verification rules.
-             */
-
-            if (
-              score.score >=
-              PROVIDER_MATCH_THRESHOLD
-            ) {
-              best = {
-                score,
-
-                job,
-
-                identifier,
-
-                exactGreenhouseIdMatch:
-                  true,
-              };
-
-              break;
-            }
-          }
-        }
-
-
-        /*
-         * ===================================================
-         * PASS 2
-         *
-         * Normal title/location/description scoring.
-         * ===================================================
-         */
-
-        for (
-          const job
-          of jobs
-        ) {
-          if (!job) {
-            continue;
-          }
-
-
-          const candidate = {
-            title:
-              job.title || "",
-
-            location:
-              job.location?.name ||
-              "",
-
-            description:
-              job.content ||
-              job.description ||
-              "",
-
-            minSalary:
-              null,
-
-            maxSalary:
-              null,
-          };
-
-
-          const normalizedIdentifier =
-            normalizeCompany(
-              identifier
-            );
-
-
-          const normalizedCompanySlug =
-            normalizeCompany(
-              sourceJob.companySlug ||
-                ""
-            );
-
-
-          const normalizedCompany =
-            normalizeCompany(
-              sourceJob.company ||
-                ""
-            );
-
-
-          const identifierConfidence =
-            normalizedIdentifier ===
-              normalizedCompanySlug ||
-            normalizedIdentifier ===
-              normalizedCompany
-              ? 1
-              : 0.9;
-
-
-          const score =
-            scoreProviderJob(
-              sourceJob,
-
-              candidate,
-
-              identifierConfidence
-            );
-
-
-          if (
-            score.score >=
-              PROVIDER_MATCH_THRESHOLD &&
-            (
-              !best ||
-              score.score >
-                best.score.score
-            )
-          ) {
-            best = {
-              score,
-
-              job,
-
-              identifier,
-
-              exactGreenhouseIdMatch:
-                false,
-            };
-          }
-        }
-
-
-        if (!best) {
-          return null;
-        }
-
-
-        /*
-         * ===================================================
-         * GREENHOUSE ABSOLUTE URL
-         * ===================================================
-         *
-         * This MUST come directly from the Greenhouse API.
-         * ===================================================
-         */
-
-        const applicationUrl =
-          typeof best.job.absolute_url ===
-            "string"
-            ? best.job.absolute_url.trim()
-            : "";
-
-
-        if (
-          !applicationUrl
-        ) {
-          return null;
-        }
-
-
-        if (
-          !isGreenhouseUrl(
-            applicationUrl
-          )
-        ) {
-          return null;
-        }
-
-
-        return {
-          provider:
-            "greenhouse",
-
-          method:
-            best.exactGreenhouseIdMatch
-              ? "greenhouse-exact-job-verification"
-              : "greenhouse-public-job-board-api",
-
-          applicationUrl,
-
-          matchedJob: {
-            title:
-              best.job.title ||
-              "",
-
-            location:
-              best.job.location?.name ||
-              "",
-          },
-
-          score:
-            best.score,
-
-          identifier:
-            best.identifier,
-
-          exactGreenhouseIdMatch:
-            best.exactGreenhouseIdMatch,
-        };
+        )
+      ) {
+        continue;
       }
+
+      const candidate =
+        greenhouseProviderCandidate(
+          job
+        );
+
+      const exactScore =
+        scoreExactGreenhouseJob(
+          sourceJob,
+          candidate,
+          identifierConfidence
+        );
+
+      if (
+        !exactScore.valid
+      ) {
+        /*
+         * The ID exists, but the job title/location does not
+         * agree strongly enough with the Himalayas listing.
+         *
+         * Do not blindly accept it.
+         */
+        continue;
+      }
+
+      const result =
+        buildGreenhouseResult(
+          sourceJob,
+
+          job,
+
+          identifier,
+
+          exactScore,
+
+          true
+        );
+
+      if (result) {
+        return result;
+      }
+    }
+  }
+
+
+  /*
+   * =======================================================
+   * PASS 2
+   * Strict normal matching
+   * =======================================================
+   */
+
+  let best = null;
+
+
+  for (
+    const job
+    of jobs
+  ) {
+    if (!job) {
+      continue;
+    }
+
+    const candidate =
+      greenhouseProviderCandidate(
+        job
+      );
+
+    const score =
+      scoreProviderJob(
+        sourceJob,
+        candidate,
+        identifierConfidence
+      );
+
+    if (
+      score.score <
+        PROVIDER_MATCH_THRESHOLD
+    ) {
+      continue;
+    }
+
+    if (
+      !best ||
+      score.score >
+        best.score.score
+    ) {
+      best = {
+        job,
+
+        score,
+
+        identifier,
+      };
+    }
+  }
+
+
+  if (!best) {
+    return null;
+  }
+
+
+  return buildGreenhouseResult(
+    sourceJob,
+
+    best.job,
+
+    best.identifier,
+
+    best.score,
+
+    false
+  );
+}
+
+
+/*
+ * =========================================================
+ * GREENHOUSE RESOLUTION
+ * =========================================================
+ *
+ * PRIORITY:
+ *
+ * 1. Known board token + known job ID
+ * 2. Known board token + strict title matching
+ * 3. Controlled guessed board identifiers
+ *
+ * IMPORTANT:
+ *
+ * If known board + exact job ID verifies, return immediately.
+ * No other Greenhouse board requests are made.
+ * =========================================================
+ */
+
+async function resolveGreenhouse(
+  sourceJob,
+  identifiers
+) {
+  const knownBoardToken =
+    String(
+      sourceJob.greenhouseBoardToken ||
+        ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const knownJobId =
+    normalizeGreenhouseJobId(
+      sourceJob.greenhouseJobId
     );
 
 
-  const results =
-    await Promise.all(
-      attempts
+  /*
+   * =======================================================
+   * PHASE 1
+   * Known Greenhouse board token
+   * =======================================================
+   */
+
+  if (
+    knownBoardToken
+  ) {
+    console.log(
+      "Greenhouse: verifying known board token:",
+      knownBoardToken
     );
 
 
-  const validResults =
-    results
-      .filter(Boolean)
-      .filter(
-        (result) =>
-          result.provider ===
-            "greenhouse" &&
-          result.applicationUrl &&
-          isGreenhouseUrl(
-            result.applicationUrl
-          )
+    /*
+     * If we know both board + job ID, this is the strongest
+     * possible route.
+     *
+     * If it verifies, STOP immediately.
+     */
+    if (
+      knownJobId
+    ) {
+      const exactResult =
+        await resolveGreenhouseOnBoard(
+          sourceJob,
+
+          knownBoardToken,
+
+          {
+            evidenceBacked:
+              true,
+
+            maxPages:
+              GREENHOUSE_MAX_PAGES,
+
+            allowExactJobId:
+              true,
+          }
+        );
+
+
+      if (
+        exactResult &&
+        exactResult.exactGreenhouseIdMatch
+      ) {
+        console.log(
+          "Greenhouse: exact board + job ID verified. Stopping search."
+        );
+
+        return exactResult;
+      }
+    }
+
+
+    /*
+     * The board is verified, but either there was no exact
+     * ID or exact ID verification failed.
+     *
+     * We can still search this known board using strict
+     * title/location matching.
+     */
+    const boardResult =
+      await resolveGreenhouseOnBoard(
+        sourceJob,
+
+        knownBoardToken,
+
+        {
+          evidenceBacked:
+            true,
+
+          maxPages:
+            GREENHOUSE_MAX_PAGES,
+
+          allowExactJobId:
+            false,
+        }
       );
 
 
+    if (
+      boardResult
+    ) {
+      console.log(
+        "Greenhouse: known board resolved job."
+      );
+
+      return boardResult;
+    }
+  }
+
+
+  /*
+   * =======================================================
+   * PHASE 2
+   * CONTROLLED FALLBACK IDENTIFIERS
+   * =======================================================
+   *
+   * Only now do we try guessed board identifiers.
+   *
+   * The known Greenhouse board token is removed so we don't
+   * query it twice.
+   */
+
+  const fallbackIdentifiers =
+    Array.from(
+      new Set(
+        identifiers.filter(
+          (identifier) =>
+            String(
+              identifier || ""
+            )
+              .trim()
+              .toLowerCase() !==
+            knownBoardToken
+        )
+      )
+    ).slice(
+      0,
+      GREENHOUSE_FALLBACK_IDENTIFIER_LIMIT
+    );
+
+
   if (
-    !validResults.length
+    !fallbackIdentifiers.length
   ) {
     return null;
   }
 
 
-  validResults.sort(
-    (a, b) => {
-      /*
-       * Exact Greenhouse job-ID verification wins over
-       * ordinary similarity when both are valid.
-       */
-
-      if (
-        a.exactGreenhouseIdMatch &&
-        !b.exactGreenhouseIdMatch
-      ) {
-        return -1;
-      }
-
-      if (
-        !a.exactGreenhouseIdMatch &&
-        b.exactGreenhouseIdMatch
-      ) {
-        return 1;
-      }
-
-      return (
-        b.score.score -
-        a.score.score
-      );
-    }
+  console.log(
+    "Greenhouse: fallback identifiers:",
+    fallbackIdentifiers
   );
 
 
-  return validResults[0];
+  /*
+   * Do these sequentially, not Promise.all().
+   *
+   * This gives us controlled request depth and allows us to
+   * stop immediately once a verified match is found.
+   */
+  for (
+    const identifier
+    of fallbackIdentifiers
+  ) {
+    const result =
+      await resolveGreenhouseOnBoard(
+        sourceJob,
+
+        identifier,
+
+        {
+          evidenceBacked:
+            false,
+
+          maxPages:
+            GREENHOUSE_FALLBACK_MAX_PAGES,
+
+          /*
+           * A job ID without a known board is not strong
+           * enough to be treated as exact evidence.
+           */
+          allowExactJobId:
+            false,
+        }
+      );
+
+
+    if (
+      result
+    ) {
+      console.log(
+        "Greenhouse: fallback board resolved job:",
+        identifier
+      );
+
+      return result;
+    }
+  }
+
+
+  return null;
 }
 
 
@@ -2845,82 +3716,51 @@ async function resolveUniversal(
   }
 
 
-  const results =
-    await Promise.all(
-      providers.map(
-        async (provider) => {
-          try {
-            return await provider.resolve(
-              sourceJob,
+  /*
+   * There is only one provider.
+   *
+   * We intentionally keep the provider architecture so the
+   * resolver can remain clean and expandable later without
+   * enabling other providers today.
+   */
 
-              identifiers
-            );
-          } catch (error) {
-            console.error(
-              `Provider ${provider.name} failed:`,
-              error?.message ||
-                "unknown error"
-            );
+  for (
+    const provider
+    of providers
+  ) {
+    try {
+      const result =
+        await provider.resolve(
+          sourceJob,
 
-            return null;
-          }
-        }
-      )
-    );
+          identifiers
+        );
 
-
-  const matches =
-    results.filter(
-      (result) =>
+      if (
         result &&
-
         result.provider ===
           "greenhouse" &&
-
         result.applicationUrl &&
-
         isHttpUrl(
           result.applicationUrl
         ) &&
-
         isGreenhouseUrl(
           result.applicationUrl
         )
-    );
-
-
-  if (
-    !matches.length
-  ) {
-    return null;
+      ) {
+        return result;
+      }
+    } catch (error) {
+      console.error(
+        `Provider ${provider.name} failed:`,
+        error?.message ||
+          "unknown error"
+      );
+    }
   }
 
 
-  matches.sort(
-    (a, b) => {
-      if (
-        a.exactGreenhouseIdMatch &&
-        !b.exactGreenhouseIdMatch
-      ) {
-        return -1;
-      }
-
-      if (
-        !a.exactGreenhouseIdMatch &&
-        b.exactGreenhouseIdMatch
-      ) {
-        return 1;
-      }
-
-      return (
-        b.score.score -
-        a.score.score
-      );
-    }
-  );
-
-
-  return matches[0];
+  return null;
 }
 
 
@@ -3193,7 +4033,9 @@ export default async function handler(
       req.query?.url;
 
 
-    if (!originalUrl) {
+    if (
+      !originalUrl
+    ) {
       return sendJson(
         res,
         400,
@@ -3261,7 +4103,9 @@ export default async function handler(
       );
 
 
-    if (!slugData) {
+    if (
+      !slugData
+    ) {
       return sendJson(
         res,
         200,
@@ -3348,33 +4192,59 @@ export default async function handler(
 
     /*
      * =====================================================
-     * GREENHOUSE APPLICATION EVIDENCE
+     * GREENHOUSE EVIDENCE
      * =====================================================
      *
-     * IMPORTANT CHANGE:
+     * First use the Himalayas API's applicationLink.
      *
-     * We now preserve and inspect Himalayas'
-     * applicationLink.
-     *
-     * If that link is Greenhouse, it is NOT returned
-     * directly.
-     *
-     * It is only used to discover:
-     *
-     * - Greenhouse board token
-     * - Greenhouse job ID
-     *
-     * Greenhouse API must still verify the job.
-     * =====================================================
+     * If that is unavailable, inspect the actual Himalayas
+     * page HTML for Greenhouse evidence.
      */
 
-    const greenhouseEvidence =
+    let greenhouseEvidence =
       extractGreenhouseApplicationEvidence(
         himalayasJob?.applicationLink ||
         himalayasJob?.applicationUrl ||
         ""
       );
 
+
+    /*
+     * HTML evidence fallback.
+     *
+     * This is only executed when the API did not give us
+     * usable Greenhouse evidence.
+     */
+    if (
+      !greenhouseEvidence ||
+      (
+        !greenhouseEvidence.boardToken &&
+        !greenhouseEvidence.jobId
+      )
+    ) {
+      try {
+        greenhouseEvidence =
+          await discoverGreenhouseEvidenceFromHimalayasPage(
+            originalUrl
+          );
+      } catch (error) {
+        console.error(
+          "Greenhouse HTML evidence discovery failed:",
+          error?.message ||
+            "unknown error"
+        );
+
+        greenhouseEvidence =
+          null;
+      }
+    }
+
+
+    /*
+     * =====================================================
+     * BUILD SOURCE JOB
+     * =====================================================
+     */
 
     const sourceJob = {
       url:
@@ -3440,10 +4310,10 @@ export default async function handler(
           : [],
 
       /*
-       * NEW:
-       * Greenhouse evidence extracted from Himalayas.
+       * Greenhouse evidence.
+       *
+       * These are evidence only.
        */
-
       greenhouseBoardToken:
         greenhouseEvidence?.boardToken ||
         "",
@@ -3461,12 +4331,6 @@ export default async function handler(
     /*
      * =====================================================
      * GREENHOUSE ONLY
-     * =====================================================
-     *
-     * There is deliberately NO general ATS fallback.
-     *
-     * Every accepted job must be verified by the
-     * Greenhouse public board API.
      * =====================================================
      */
 
@@ -3529,6 +4393,10 @@ export default async function handler(
      * =====================================================
      * NO VERIFIED GREENHOUSE MATCH
      * =====================================================
+     *
+     * IMPORTANT:
+     *
+     * No Himalayas fallback.
      */
 
     return sendJson(
