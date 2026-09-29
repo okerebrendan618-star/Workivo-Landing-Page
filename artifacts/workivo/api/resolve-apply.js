@@ -13,34 +13,39 @@ const HIMALAYAS_HOSTS = new Set([
  * WORKIVO GREENHOUSE-VERIFIED APPLICATION RESOLVER
  * =========================================================
  *
- * LAUNCH RULE
+ * LAUNCH FLOW
  *
  * Himalayas Job
  *      ↓
  * Extract company + title
  *      ↓
- * Himalayas source lookup when available
+ * Himalayas source lookup
  *      ↓
- * Greenhouse verification
+ * Build Greenhouse board identifiers
  *      ↓
- * ┌───────────────────────────────┐
- * │ Greenhouse verified match?    │
- * └───────────────────────────────┘
- *          ↓                 ↓
- *         YES               NO
- *          ↓                 ↓
+ * Greenhouse public board API
+ *      ↓
+ * Score returned Greenhouse jobs
+ *      ↓
+ * Verified Greenhouse job?
+ *      ↓                 ↓
+ *     YES               NO
+ *      ↓                 ↓
  * Greenhouse URL       resolved:false
- *                      applyUrl:null
+ *
  *
  * IMPORTANT
  *
- * - Greenhouse is the ONLY enabled provider at launch.
- * - Other ATS providers are intentionally disabled.
- * - No Himalayas fallback application URL is returned.
- * - No arbitrary external links are accepted.
- * - No company-specific job IDs are hardcoded.
- * - No company-specific application URLs are hardcoded.
- * - Greenhouse matching procedure is preserved.
+ * - Greenhouse is the ONLY enabled provider.
+ * - No Lever.
+ * - No Ashby.
+ * - No SmartRecruiters.
+ * - No Workable.
+ * - No Recruitee.
+ * - No Himalayas fallback application URL.
+ * - No guessed application URLs.
+ * - No hardcoded company job IDs.
+ * - Greenhouse URL must come from Greenhouse's API.
  *
  * =========================================================
  */
@@ -60,27 +65,12 @@ const PROVIDER_MATCH_THRESHOLD = 0.78;
 
 const FETCH_TIMEOUT_MS = 5000;
 
-const MAX_COMPANY_IDENTIFIERS = 8;
+const MAX_COMPANY_IDENTIFIERS = 12;
 
 
 /*
  * =========================================================
- * LAUNCH PROVIDER CONFIGURATION
- * =========================================================
- *
- * Greenhouse is the ONLY provider enabled for launch.
- *
- * Future providers can be added later without changing
- * the overall resolver architecture.
- *
- * Example later:
- *
- * const ENABLED_PROVIDERS = [
- *   "greenhouse",
- *   "ashby",
- * ];
- *
- * But for launch we intentionally keep this Greenhouse-only.
+ * ENABLED PROVIDERS
  * =========================================================
  */
 
@@ -125,6 +115,7 @@ function isHttpUrl(value) {
   }
 }
 
+
 function isHimalayasUrl(value) {
   try {
     const url = new URL(value);
@@ -140,13 +131,7 @@ function isHimalayasUrl(value) {
 
 /*
  * =========================================================
- * GREENHOUSE URL VERIFICATION
- * =========================================================
- *
- * We only accept actual Greenhouse application URLs.
- *
- * This prevents a Greenhouse resolver result from
- * accidentally returning an unrelated external URL.
+ * GREENHOUSE URL VALIDATION
  * =========================================================
  */
 
@@ -156,11 +141,10 @@ function isGreenhouseUrl(value) {
   }
 
   try {
-    const hostname =
-      new URL(value)
-        .hostname
-        .toLowerCase()
-        .replace(/^www\./, "");
+    const hostname = new URL(value)
+      .hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
 
     return (
       hostname === "greenhouse.io" ||
@@ -193,6 +177,7 @@ function normalize(value = "") {
     .trim();
 }
 
+
 function normalizeCompany(value = "") {
   return normalize(value)
     .replace(
@@ -202,6 +187,7 @@ function normalizeCompany(value = "") {
     .replace(/[^a-z0-9]+/g, "")
     .trim();
 }
+
 
 function normalizeTitle(value = "") {
   return normalize(value)
@@ -214,6 +200,7 @@ function normalizeTitle(value = "") {
     .trim();
 }
 
+
 function normalizeLocation(value = "") {
   return normalize(value)
     .replace(/[^a-z0-9\s,-]+/g, " ")
@@ -221,12 +208,14 @@ function normalizeLocation(value = "") {
     .trim();
 }
 
+
 function slugify(value = "") {
   return normalize(value)
     .replace(/&/g, "and")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
 
 function companyNameFromSlug(slug = "") {
   return String(slug || "")
@@ -241,7 +230,7 @@ function companyNameFromSlug(slug = "") {
 
 /*
  * =========================================================
- * TITLE EXTRACTION FROM HIMALAYAS JOB SLUG
+ * HIMALAYAS JOB TITLE FROM SLUG
  * =========================================================
  */
 
@@ -255,7 +244,7 @@ function titleFromJobSlug(jobSlug = "") {
 
 /*
  * =========================================================
- * STOP WORDS / SIMILARITY
+ * STOP WORDS
  * =========================================================
  */
 
@@ -298,6 +287,13 @@ const STOP_WORDS = new Set([
   "remote",
 ]);
 
+
+/*
+ * =========================================================
+ * TOKEN / JACCARD SIMILARITY
+ * =========================================================
+ */
+
 function tokenSet(value = "") {
   return new Set(
     normalize(value)
@@ -313,6 +309,7 @@ function tokenSet(value = "") {
       )
   );
 }
+
 
 function jaccardSimilarity(a, b) {
   const first = tokenSet(a);
@@ -340,6 +337,7 @@ function jaccardSimilarity(a, b) {
     : 0;
 }
 
+
 function titleSimilarity(a, b) {
   const first = normalizeTitle(a);
   const second = normalizeTitle(b);
@@ -361,7 +359,7 @@ function titleSimilarity(a, b) {
 
 /*
  * =========================================================
- * JOB SLUG / TITLE MATCHING
+ * JOB SLUG MATCHING
  * =========================================================
  */
 
@@ -371,6 +369,7 @@ function cleanRequestedJobSlug(jobSlug = "") {
       .replace(/[-_]+\d{4,}$/g, "")
   );
 }
+
 
 function jobSlugSimilarity(
   requestedJobSlug = "",
@@ -401,6 +400,7 @@ function jobSlugSimilarity(
     titleSlug.replace(/-/g, " ")
   );
 }
+
 
 function exactJobTitleMatch(
   job,
@@ -473,6 +473,7 @@ function normalizeLocationRestrictions(
     .filter(Boolean);
 }
 
+
 function locationMatches(
   sourceRestrictions,
   providerLocation
@@ -499,10 +500,10 @@ function locationMatches(
     return true;
   }
 
-  for (const country of restrictions) {
+  for (const restriction of restrictions) {
     if (
-      country &&
-      location.includes(country)
+      restriction &&
+      location.includes(restriction)
     ) {
       return true;
     }
@@ -533,6 +534,7 @@ function numberValue(value) {
     ? number
     : null;
 }
+
 
 function salaryMatches(
   sourceJob,
@@ -604,6 +606,7 @@ function sleep(ms) {
   );
 }
 
+
 async function fetchWithTimeout(
   url,
   options = {},
@@ -639,6 +642,7 @@ async function fetchWithTimeout(
     clearTimeout(timer);
   }
 }
+
 
 async function fetchJson(
   url,
@@ -891,7 +895,7 @@ function scoreHimalayasCandidate(
 
 /*
  * =========================================================
- * HIMALAYAS SEARCH REQUEST
+ * HIMALAYAS SEARCH
  * =========================================================
  */
 
@@ -1088,6 +1092,7 @@ async function getHimalayasJob(
       );
     }
   }
+
 
   function findExact(
     jobs
@@ -1416,7 +1421,26 @@ async function getHimalayasJob(
 
 /*
  * =========================================================
- * COMPANY IDENTIFIERS
+ * GREENHOUSE COMPANY IDENTIFIERS
+ * =========================================================
+ *
+ * THIS IS IMPORTANT.
+ *
+ * Himalayas may identify a company as:
+ *
+ * greenhouse-com
+ *
+ * while Greenhouse may use:
+ *
+ * greenhouse
+ *
+ * as the board identifier.
+ *
+ * We therefore generate several safe candidates.
+ *
+ * Nothing here creates a job URL.
+ * These are ONLY board identifiers used against the
+ * official Greenhouse public API.
  * =========================================================
  */
 
@@ -1434,7 +1458,8 @@ function companyIdentifiers(
     const cleaned =
       String(value)
         .trim()
-        .toLowerCase();
+        .toLowerCase()
+        .replace(/^[-_]+|[-_]+$/g, "");
 
     if (
       cleaned &&
@@ -1448,16 +1473,37 @@ function companyIdentifiers(
     }
   }
 
+
+  const rawSlug =
+    String(
+      companySlug ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const rawName =
+    String(
+      companyName ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+
   const canonicalSlug =
     slugify(
       companySlug ||
       companyName
     );
 
+
   const nameSlug =
     slugify(
       companyName
     );
+
 
   const compactSlug =
     canonicalSlug.replace(
@@ -1465,10 +1511,16 @@ function companyIdentifiers(
       ""
     );
 
+
   const compactName =
     normalizeCompany(
       companyName
     );
+
+
+  /*
+   * Original identifiers
+   */
 
   add(
     canonicalSlug
@@ -1485,6 +1537,82 @@ function companyIdentifiers(
   add(
     compactName
   );
+
+
+  /*
+   * Raw company slug
+   */
+
+  add(
+    rawSlug
+  );
+
+
+  /*
+   * Strip common corporate suffixes.
+   */
+
+  const withoutCompanySuffix =
+    canonicalSlug
+      .replace(
+        /-(inc|llc|ltd|limited|corp|corporation|company|co|plc)$/i,
+        ""
+      );
+
+  add(
+    withoutCompanySuffix
+  );
+
+
+  /*
+   * VERY IMPORTANT:
+   *
+   * Himalayas company slugs sometimes contain ".com"
+   * represented as "-com".
+   *
+   * Example:
+   *
+   * greenhouse-com
+   *
+   * becomes:
+   *
+   * greenhouse
+   *
+   * This is a Greenhouse board identifier candidate.
+   */
+
+  const withoutComSuffix =
+    canonicalSlug
+      .replace(
+        /-com$/i,
+        ""
+      );
+
+  add(
+    withoutComSuffix
+  );
+
+
+  /*
+   * Also support a literal ".com" if one ever reaches
+   * this function.
+   */
+
+  const withoutDotCom =
+    rawSlug
+      .replace(
+        /\.com$/i,
+        ""
+      );
+
+  add(
+    withoutDotCom
+  );
+
+
+  /*
+   * Company-name tokens.
+   */
 
   const companyTokens =
     normalize(
@@ -1512,6 +1640,11 @@ function companyIdentifiers(
     );
   }
 
+
+  /*
+   * Remove obvious corporate words.
+   */
+
   const filtered =
     values.filter(
       (value) =>
@@ -1521,12 +1654,15 @@ function companyIdentifiers(
           "ltd",
           "limited",
           "corp",
+          "corporation",
           "company",
           "co",
+          "plc",
         ].includes(
           value
         )
     );
+
 
   return filtered.slice(
     0,
@@ -1540,10 +1676,7 @@ function companyIdentifiers(
  * PROVIDER MATCH SCORING
  * =========================================================
  *
- * THIS IS THE SAME MATCHING MODEL USED BY THE WORKING
- * GREENHOUSE PROCEDURE.
- *
- * We are deliberately not changing it.
+ * KEEPING THE ORIGINAL WORKING MODEL.
  * =========================================================
  */
 
@@ -1558,9 +1691,11 @@ function scoreProviderJob(
     sourceJob.title,
   ].filter(Boolean);
 
+
   let titleScore = 0;
 
   let matchedTitle = "";
+
 
   for (
     const titleCandidate
@@ -1585,6 +1720,12 @@ function scoreProviderJob(
     }
   }
 
+
+  /*
+   * A Greenhouse job must first be a reasonably strong
+   * title match.
+   */
+
   if (
     titleScore <
     PROVIDER_MATCH_THRESHOLD
@@ -1606,13 +1747,16 @@ function scoreProviderJob(
     };
   }
 
+
   const sourceRestrictions =
     sourceJob.locationRestrictions ||
     [];
 
+
   const providerLocation =
     providerJob.location ||
     "";
+
 
   const locationOk =
     locationMatches(
@@ -1620,6 +1764,7 @@ function scoreProviderJob(
 
       providerLocation
     );
+
 
   if (
     sourceRestrictions.length &&
@@ -1642,10 +1787,12 @@ function scoreProviderJob(
     };
   }
 
+
   const locationScore =
     sourceRestrictions.length
       ? 1
       : 0.5;
+
 
   const descriptionScore =
     providerJob.description
@@ -1657,6 +1804,7 @@ function scoreProviderJob(
         )
       : 0;
 
+
   const salaryScore =
     salaryMatches(
       sourceJob,
@@ -1665,6 +1813,7 @@ function scoreProviderJob(
     )
       ? 1
       : 0;
+
 
   const score =
     titleScore * 0.60 +
@@ -1679,6 +1828,7 @@ function scoreProviderJob(
     salaryScore * 0.05 +
 
     identifierConfidence * 0.10;
+
 
   return {
     score,
@@ -1703,15 +1853,18 @@ function scoreProviderJob(
  * GREENHOUSE
  * =========================================================
  *
- * IMPORTANT:
+ * THIS IS THE CORE VERIFIED PROCEDURE.
  *
- * This is the existing working Greenhouse procedure.
+ * We call the official public Greenhouse Board API.
  *
- * The public Greenhouse Board API is used to search the
- * company's jobs and then the strongest verified matching
- * job is returned.
+ * We NEVER construct a Greenhouse job URL ourselves.
  *
- * DO NOT replace this with guessed URLs.
+ * Greenhouse gives us:
+ *
+ * job.absolute_url
+ *
+ * and that exact URL is returned only after the job passes
+ * our verification score.
  * =========================================================
  */
 
@@ -1719,21 +1872,30 @@ async function resolveGreenhouse(
   sourceJob,
   identifiers
 ) {
+  /*
+   * Keep every successful candidate.
+   *
+   * One company identifier can fail while another is
+   * the correct Greenhouse board identifier.
+   */
+
   const attempts =
     identifiers.map(
       async (identifier) => {
-        const url =
+        const endpoint =
           `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(
             identifier
           )}/jobs?content=true`;
 
+
         const result =
           await fetchJson(
-            url,
+            endpoint,
             {},
-            5000,
-            0
+            6000,
+            1
           );
+
 
         if (
           !result.ok ||
@@ -1745,12 +1907,24 @@ async function resolveGreenhouse(
           return null;
         }
 
+
         let best = null;
+
 
         for (
           const job
           of result.data.jobs
         ) {
+          if (!job) {
+            continue;
+          }
+
+
+          /*
+           * Greenhouse API job object → our normalized
+           * provider candidate.
+           */
+
           const candidate = {
             title:
               job.title || "",
@@ -1760,7 +1934,9 @@ async function resolveGreenhouse(
               "",
 
             description:
-              job.content || "",
+              job.content ||
+              job.description ||
+              "",
 
             minSalary:
               null,
@@ -1769,16 +1945,45 @@ async function resolveGreenhouse(
               null,
           };
 
-          const confidence =
+
+          /*
+           * Identifier confidence.
+           *
+           * The board identifier itself is evidence that
+           * we are looking at that company's Greenhouse
+           * board.
+           *
+           * Keep the original 1.0 / 0.9 approach.
+           */
+
+          const normalizedIdentifier =
             normalizeCompany(
               identifier
-            ) ===
+            );
+
+
+          const normalizedCompanySlug =
             normalizeCompany(
               sourceJob.companySlug ||
                 ""
-            )
+            );
+
+
+          const normalizedCompany =
+            normalizeCompany(
+              sourceJob.company ||
+                ""
+            );
+
+
+          const identifierConfidence =
+            normalizedIdentifier ===
+              normalizedCompanySlug ||
+            normalizedIdentifier ===
+              normalizedCompany
               ? 1
               : 0.9;
+
 
           const score =
             scoreProviderJob(
@@ -1786,8 +1991,13 @@ async function resolveGreenhouse(
 
               candidate,
 
-              confidence
+              identifierConfidence
             );
+
+
+          /*
+           * Only keep genuine matches.
+           */
 
           if (
             score.score >=
@@ -1808,19 +2018,40 @@ async function resolveGreenhouse(
           }
         }
 
+
         if (!best) {
           return null;
         }
 
-        const applicationUrl =
-          best.job.absolute_url ||
-          "";
 
         /*
-         * EXTRA SAFETY:
+         * IMPORTANT:
          *
-         * Even though Greenhouse's API supplies this URL,
-         * verify that it is actually a Greenhouse URL.
+         * Use Greenhouse's own absolute_url.
+         *
+         * Never construct:
+         *
+         * /jobs/{id}
+         *
+         * ourselves.
+         */
+
+        const applicationUrl =
+          typeof best.job.absolute_url ===
+            "string"
+            ? best.job.absolute_url.trim()
+            : "";
+
+
+        if (
+          !applicationUrl
+        ) {
+          return null;
+        }
+
+
+        /*
+         * Final URL safety check.
          */
 
         if (
@@ -1830,6 +2061,7 @@ async function resolveGreenhouse(
         ) {
           return null;
         }
+
 
         return {
           provider:
@@ -1842,7 +2074,8 @@ async function resolveGreenhouse(
 
           matchedJob: {
             title:
-              best.job.title,
+              best.job.title ||
+              "",
 
             location:
               best.job.location?.name ||
@@ -1858,37 +2091,48 @@ async function resolveGreenhouse(
       }
     );
 
+
   const results =
     await Promise.all(
       attempts
     );
 
-  return (
+
+  const validResults =
     results
       .filter(Boolean)
-      .sort(
-        (a, b) =>
-          b.score.score -
-          a.score.score
-      )[0] ||
-    null
+      .filter(
+        (result) =>
+          result.provider ===
+            "greenhouse" &&
+          result.applicationUrl &&
+          isGreenhouseUrl(
+            result.applicationUrl
+          )
+      );
+
+
+  if (
+    !validResults.length
+  ) {
+    return null;
+  }
+
+
+  validResults.sort(
+    (a, b) =>
+      b.score.score -
+      a.score.score
   );
+
+
+  return validResults[0];
 }
 
 
 /*
  * =========================================================
- * GREENHOUSE-ONLY UNIVERSAL RESOLUTION
- * =========================================================
- *
- * The architecture is still called "universal" internally
- * so that future providers can be added cleanly.
- *
- * BUT:
- *
- * ENABLED_PROVIDERS = ["greenhouse"]
- *
- * Therefore no other ATS is called at launch.
+ * GREENHOUSE-ONLY RESOLUTION
  * =========================================================
  */
 
@@ -1903,7 +2147,22 @@ async function resolveUniversal(
       companySlug
     );
 
+
+  console.log(
+    "Greenhouse board identifiers:",
+    identifiers
+  );
+
+
+  if (
+    !identifiers.length
+  ) {
+    return null;
+  }
+
+
   const providers = [];
+
 
   if (
     ENABLED_PROVIDERS.includes(
@@ -1919,26 +2178,13 @@ async function resolveUniversal(
     });
   }
 
-  /*
-   * Other providers intentionally disabled.
-   *
-   * They are NOT called.
-   *
-   * Future examples:
-   *
-   * if (ENABLED_PROVIDERS.includes("ashby")) {
-   *   providers.push({
-   *     name: "ashby",
-   *     resolve: resolveAshby,
-   *   });
-   * }
-   */
 
   if (
     !providers.length
   ) {
     return null;
   }
+
 
   const results =
     await Promise.all(
@@ -1953,7 +2199,6 @@ async function resolveUniversal(
           } catch (error) {
             console.error(
               `Provider ${provider.name} failed:`,
-
               error?.message ||
                 "unknown error"
             );
@@ -1963,6 +2208,7 @@ async function resolveUniversal(
         }
       )
     );
+
 
   const matches =
     results.filter(
@@ -1983,11 +2229,13 @@ async function resolveUniversal(
         )
     );
 
+
   if (
     !matches.length
   ) {
     return null;
   }
+
 
   matches.sort(
     (a, b) =>
@@ -1995,13 +2243,14 @@ async function resolveUniversal(
       a.score.score
   );
 
+
   return matches[0];
 }
 
 
 /*
  * =========================================================
- * RESPONSE FORMAT HELPERS
+ * RESOLVED RESPONSE
  * =========================================================
  */
 
@@ -2111,6 +2360,10 @@ function buildResolvedResponse(
       greenhouseVerification:
         true,
     },
+
+    checkedProviders: [
+      "greenhouse",
+    ],
   };
 }
 
@@ -2119,27 +2372,14 @@ function buildResolvedResponse(
  * =========================================================
  * UNRESOLVED RESPONSE
  * =========================================================
- *
- * IMPORTANT CHANGE:
- *
- * We NO LONGER return the Himalayas URL as applyUrl.
- *
- * This makes it impossible for the resolver to accidentally
- * treat an unverified Himalayas listing as a verified
- * application destination.
- *
- * Dashboard/batch logic should keep ONLY:
- *
- * resolved === true
- *
- * =========================================================
  */
 
 function buildUnresolvedResponse(
   originalUrl,
   sourceJob,
   sourceLookupAvailable,
-  method = "greenhouse-no-verified-match"
+  method =
+    "greenhouse-no-verified-match"
 ) {
   return {
     originalUrl,
@@ -2224,7 +2464,7 @@ export default async function handler(
 
 
   /*
-   * ONLY GET
+   * GET ONLY
    */
 
   if (
@@ -2245,12 +2485,13 @@ export default async function handler(
   try {
     /*
      * =====================================================
-     * GET URL
+     * URL PARAMETER
      * =====================================================
      */
 
     const originalUrl =
       req.query?.url;
+
 
     if (!originalUrl) {
       return sendJson(
@@ -2288,7 +2529,7 @@ export default async function handler(
 
     /*
      * =====================================================
-     * ONLY HIMALAYAS INPUTS
+     * HIMALAYAS ONLY
      * =====================================================
      */
 
@@ -2310,7 +2551,7 @@ export default async function handler(
 
     /*
      * =====================================================
-     * PARSE HIMALAYAS JOB URL
+     * PARSE HIMALAYAS JOB
      * =====================================================
      */
 
@@ -2318,6 +2559,7 @@ export default async function handler(
       extractHimalayasJob(
         originalUrl
       );
+
 
     if (!slugData) {
       return sendJson(
@@ -2351,13 +2593,14 @@ export default async function handler(
 
     /*
      * =====================================================
-     * REQUEST OVERRIDES
+     * OPTIONAL REQUEST OVERRIDES
      * =====================================================
      */
 
     const requestedTitle =
       req.query?.title ||
       slugData.requestedTitle;
+
 
     const requestedCompany =
       req.query?.company ||
@@ -2371,18 +2614,17 @@ export default async function handler(
      * HIMALAYAS SOURCE LOOKUP
      * =====================================================
      *
-     * This is still useful because it gives Greenhouse
-     * more accurate title/company/location information.
+     * We keep this because it was part of the original
+     * working flow and gives us better metadata.
      *
-     * HOWEVER:
-     *
-     * Greenhouse resolution continues even if this lookup
-     * fails.
+     * But Greenhouse verification does NOT depend entirely
+     * on this lookup succeeding.
      * =====================================================
      */
 
     let himalayasJob =
       null;
+
 
     try {
       himalayasJob =
@@ -2396,7 +2638,6 @@ export default async function handler(
     } catch (error) {
       console.error(
         "Himalayas lookup failed:",
-
         error?.message ||
           "unknown error"
       );
@@ -2406,16 +2647,17 @@ export default async function handler(
     }
 
 
-    /*
-     * =====================================================
-     * BUILD SOURCE JOB
-     * =====================================================
-     */
-
     const sourceLookupAvailable =
       Boolean(
         himalayasJob
       );
+
+
+    /*
+     * =====================================================
+     * SOURCE JOB
+     * =====================================================
+     */
 
     const sourceJob = {
       url:
@@ -2484,23 +2726,27 @@ export default async function handler(
 
     /*
      * =====================================================
-     * GREENHOUSE-ONLY RESOLUTION
+     * GREENHOUSE ONLY
      * =====================================================
      *
-     * No direct Himalayas Apply-link shortcut.
+     * IMPORTANT:
      *
-     * Why?
+     * There is deliberately NO:
      *
-     * The new launch rule says Workivo must verify the job
-     * through Greenhouse.
+     * resolveFromHimalayasApplyLink()
      *
-     * Therefore even if Himalayas exposes some other ATS
-     * link, we do NOT accept it.
+     * here.
+     *
+     * That would allow a non-Greenhouse ATS through.
+     *
+     * Every accepted job must be verified by the
+     * Greenhouse public board API.
      * =====================================================
      */
 
     let resolved =
       null;
+
 
     try {
       resolved =
@@ -2512,7 +2758,6 @@ export default async function handler(
     } catch (error) {
       console.error(
         "Greenhouse resolver failed:",
-
         error?.message ||
           "unknown error"
       );
@@ -2557,11 +2802,6 @@ export default async function handler(
     /*
      * =====================================================
      * NO VERIFIED GREENHOUSE MATCH
-     * =====================================================
-     *
-     * DO NOT return the Himalayas URL.
-     *
-     * This job must be dropped by the batch consumer.
      * =====================================================
      */
 
