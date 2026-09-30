@@ -251,6 +251,41 @@ function extractGreenhouseApplicationEvidence(
         ) || "";
     }
 
+    /*
+     * Greenhouse embedded job-board URLs:
+     *
+     * https://boards.greenhouse.io/embed/job_board?for=tebra
+     *
+     * These do not contain a job ID, but they give us a
+     * legitimate Greenhouse board token.
+     */
+    if (
+      !boardToken &&
+      (
+        hostname === "boards.greenhouse.io" ||
+        hostname === "job-boards.greenhouse.io"
+      )
+    ) {
+      const embedPath =
+        pathParts
+          .map((part) =>
+            part.toLowerCase()
+          )
+          .join("/");
+
+      if (
+        embedPath ===
+          "embed/job_board" ||
+        embedPath ===
+          "embed/job_board/index.html"
+      ) {
+        boardToken =
+          parsed.searchParams.get(
+            "for"
+          ) || "";
+      }
+    }
+
     if (
       !boardToken &&
       pathParts.length >= 1
@@ -332,68 +367,275 @@ async function discoverGreenhouseEvidenceFromHimalayasPage(
 
     /*
      * Normalize common HTML/JSON escaping.
+     *
+     * Himalayas pages can contain:
+     *
+     * https:\/\/job-boards.greenhouse.io\/tebra\/jobs\/123
+     *
+     * or:
+     *
+     * https://boards.greenhouse.io/embed/job_board?for=tebra
+     *
+     * or HTML-encoded versions.
      */
     html = html
+      .replace(/\\u002F/gi, "/")
+      .replace(/\\u002f/gi, "/")
+      .replace(/\\u0026/gi, "&")
       .replace(/\\\//g, "/")
       .replace(/&amp;/gi, "&")
-      .replace(/\\u002F/gi, "/");
+      .replace(/&quot;/gi, '"')
+      .replace(/&#x2f;|&#47;/gi, "/")
+      .replace(/&#x26;|&#38;/gi, "&");
 
     /*
-     * Look specifically for hosted Greenhouse board URLs.
+     * -------------------------------------------------------
+     * 1. Full Greenhouse job URLs
+     * -------------------------------------------------------
+     *
+     * Supports:
+     *
+     * https://boards.greenhouse.io/company/jobs/123
+     * https://job-boards.greenhouse.io/company/jobs/123
+     * boards.greenhouse.io/company/jobs/123
+     * escaped variants after normalization
      */
-    const greenhouseUrlMatches =
-      html.match(
-        /https?:\/\/(?:boards|job-boards)\.greenhouse\.io\/[^"'<>\\\s]+/gi
-      ) || [];
+    const greenhouseJobUrlRegex =
+      /(?:https?:)?\/\/(?:boards|job-boards)\.greenhouse\.io\/([a-z0-9][a-z0-9._-]*)\/jobs\/(\d+)(?:\?[^"'<>\\\s]*)?/gi;
 
-    for (
-      const candidateUrl
-      of greenhouseUrlMatches
+    let match;
+
+    while (
+      (match =
+        greenhouseJobUrlRegex.exec(
+          html
+        )) !== null
     ) {
-      const cleanedUrl =
-        candidateUrl
-          .replace(
-            /[),.;]+$/,
-            ""
-          );
+      const boardToken =
+        match[1] || "";
 
-      const evidence =
-        extractGreenhouseApplicationEvidence(
-          cleanedUrl
-        );
+      const jobId =
+        match[2] || "";
 
       if (
-        evidence &&
-        (
-          evidence.boardToken ||
-          evidence.jobId
-        )
+        boardToken &&
+        jobId
       ) {
-        return evidence;
+        return {
+          applicationLink:
+            match[0],
+
+          boardToken:
+            boardToken.trim(),
+
+          jobId:
+            String(
+              jobId
+            ).trim(),
+        };
       }
     }
 
+
     /*
-     * Some pages may contain escaped Greenhouse paths
-     * without a complete absolute URL.
-     *
-     * We only use them when both the Greenhouse board
-     * domain and job structure are clearly present.
+     * -------------------------------------------------------
+     * 2. Greenhouse job URLs where protocol/slashes are
+     *    represented differently.
+     * -------------------------------------------------------
      */
-    const greenhousePathMatch =
+    const greenhousePathRegex =
+      /(?:boards|job-boards)\.greenhouse\.io[\/\\]+([a-z0-9][a-z0-9._-]*)[\/\\]+jobs[\/\\]+(\d+)/gi;
+
+    while (
+      (match =
+        greenhousePathRegex.exec(
+          html
+        )) !== null
+    ) {
+      const boardToken =
+        match[1] || "";
+
+      const jobId =
+        match[2] || "";
+
+      if (
+        boardToken &&
+        jobId
+      ) {
+        return {
+          applicationLink: "",
+
+          boardToken:
+            boardToken.trim(),
+
+          jobId:
+            String(
+              jobId
+            ).trim(),
+        };
+      }
+    }
+
+
+    /*
+     * -------------------------------------------------------
+     * 3. Greenhouse embedded job board.
+     * -------------------------------------------------------
+     *
+     * Common Greenhouse embed:
+     *
+     * boards.greenhouse.io/embed/job_board?for=tebra
+     *
+     * This is strong board evidence even though it does not
+     * contain an individual job ID.
+     */
+    const greenhouseEmbedRegex =
+      /(?:boards|job-boards)\.greenhouse\.io[\/\\]+embed[\/\\]+job_board(?:[^"'<>\\\s]*?)(?:[?&]|%3F|%26)for(?:=|%3D)([a-z0-9][a-z0-9._-]*)/i;
+
+    const embedMatch =
       html.match(
-        /(?:boards|job-boards)\.greenhouse\.io\/([^"'<>\\\s]+?)(?:\/jobs\/(\d+))/i
+        greenhouseEmbedRegex
       );
 
-    if (greenhousePathMatch) {
+    if (
+      embedMatch &&
+      embedMatch[1]
+    ) {
       return {
         applicationLink: "",
+
         boardToken:
-          greenhousePathMatch[1] || "",
-        jobId:
-          greenhousePathMatch[2] || "",
+          embedMatch[1]
+            .trim(),
+
+        jobId: "",
       };
     }
+
+
+    /*
+     * -------------------------------------------------------
+     * 4. Greenhouse board URL without /jobs/.
+     * -------------------------------------------------------
+     *
+     * Example:
+     *
+     * https://job-boards.greenhouse.io/tebra
+     *
+     * This gives us the board token and allows the resolver
+     * to search the public Greenhouse board by title.
+     */
+    const greenhouseBoardRegex =
+      /(?:https?:)?\/\/(?:boards|job-boards)\.greenhouse\.io\/([a-z0-9][a-z0-9._-]*)(?:[\/?#"'<>\\\s]|$)/gi;
+
+    while (
+      (match =
+        greenhouseBoardRegex.exec(
+          html
+        )) !== null
+    ) {
+      const boardToken =
+        match[1] || "";
+
+      if (
+        boardToken &&
+        boardToken.toLowerCase() !==
+          "embed"
+      ) {
+        return {
+          applicationLink: "",
+
+          boardToken:
+            boardToken.trim(),
+
+          jobId: "",
+        };
+      }
+    }
+
+
+    /*
+     * -------------------------------------------------------
+     * 5. Greenhouse references inside JSON/data attributes.
+     * -------------------------------------------------------
+     *
+     * Some pages don't expose a normal URL but may expose
+     * board_token / boardToken values around Greenhouse
+     * references.
+     *
+     * We only accept these if the same page contains an
+     * explicit Greenhouse domain reference.
+     */
+    if (
+      /(?:boards|job-boards)\.greenhouse\.io/i.test(
+        html
+      )
+    ) {
+      const boardTokenMatch =
+        html.match(
+          /["'](?:board_token|boardToken)["']\s*[:=]\s*["']([a-z0-9][a-z0-9._-]*)["']/i
+        );
+
+      if (
+        boardTokenMatch &&
+        boardTokenMatch[1]
+      ) {
+        return {
+          applicationLink: "",
+
+          boardToken:
+            boardTokenMatch[1].trim(),
+
+          jobId: "",
+        };
+      }
+    }
+
+
+    /*
+     * -------------------------------------------------------
+     * 6. gh_jid associated with a Greenhouse reference.
+     * -------------------------------------------------------
+     *
+     * We NEVER accept a random gh_jid by itself.
+     *
+     * It must appear near a Greenhouse reference.
+     */
+    const greenhouseJidRegex =
+      /(?:boards|job-boards)\.greenhouse\.io[\s\S]{0,600}?gh_jid(?:=|%3D|["':\s]+)(\d+)/i;
+
+    const jidMatch =
+      html.match(
+        greenhouseJidRegex
+      );
+
+    if (
+      jidMatch &&
+      jidMatch[1]
+    ) {
+      const nearbyGreenhouse =
+        html.match(
+          /(?:boards|job-boards)\.greenhouse\.io[\/\\]+([a-z0-9][a-z0-9._-]*)/i
+        );
+
+      if (
+        nearbyGreenhouse &&
+        nearbyGreenhouse[1]
+      ) {
+        return {
+          applicationLink: "",
+
+          boardToken:
+            nearbyGreenhouse[1].trim(),
+
+          jobId:
+            String(
+              jidMatch[1]
+            ).trim(),
+        };
+      }
+    }
+
 
     return null;
   } catch {
@@ -448,6 +690,29 @@ function normalizeTitle(value = "") {
       .replace(
         /\b(full time|fulltime|part time|parttime|remote|hybrid|onsite|on site)\b/g,
         " "
+      );
+
+  /*
+   * Normalize common finance/title abbreviations before
+   * punctuation is removed.
+   *
+   * FP&A / FP & A / F.P.&A.
+   *
+   * become FPA.
+   */
+  title =
+    title
+      .replace(
+        /\bf\s*p\s*&\s*a\b/gi,
+        "fpa"
+      )
+      .replace(
+        /\bfp\s+a\b/gi,
+        "fpa"
+      )
+      .replace(
+        /\bfp\s*and\s*a\b/gi,
+        "fpa"
       );
 
   /*
@@ -2832,77 +3097,6 @@ function greenhouseJobIdsMatch(
 
 /*
  * =========================================================
- * GREENHOUSE BOARD PROBE
- * =========================================================
- *
- * SURGICAL DISCOVERY FIX
- *
- * Before spending time searching a candidate identifier,
- * verify that the identifier actually exposes a public
- * Greenhouse board.
- *
- * Example:
- *
- * Tebra
- *   ↓
- * tebra
- *   ↓
- * Greenhouse board probe
- *   ↓
- * board exists
- *   ↓
- * search Tebra jobs
- *
- * This does NOT produce the final application URL.
- *
- * The final application URL must still come from the
- * Greenhouse jobs API.
- * =========================================================
- */
-
-async function probeGreenhouseBoard(
-  identifier
-) {
-  const cleaned =
-    String(
-      identifier || ""
-    )
-      .trim()
-      .toLowerCase();
-
-  if (!cleaned) {
-    return false;
-  }
-
-  const endpoint =
-    `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(
-      cleaned
-    )}/jobs?content=false`;
-
-  const result =
-    await fetchJson(
-      endpoint,
-      {},
-      6000,
-      1
-    );
-
-  if (
-    !result.ok ||
-    !result.data ||
-    !Array.isArray(
-      result.data.jobs
-    )
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-
-/*
- * =========================================================
  * GREENHOUSE JOB FETCH
  * =========================================================
  */
@@ -3201,10 +3395,13 @@ function buildGreenhouseResult(
  *
  * One board at a time.
  *
- * This is deliberately sequential.
- *
  * We do NOT blast all possible Greenhouse identifiers
  * simultaneously.
+ *
+ * IMPORTANT:
+ *
+ * The Greenhouse jobs endpoint itself is the board
+ * verification. We do not make a separate probe request.
  * =========================================================
  */
 
@@ -3222,45 +3419,6 @@ async function resolveGreenhouseOnBoard(
   } = options;
 
 
-  /*
-   * =======================================================
-   * SURGICAL BOARD DISCOVERY FIX
-   * =======================================================
-   *
-   * Verify that this identifier actually corresponds to a
-   * public Greenhouse board before doing the deeper job
-   * search.
-   *
-   * This allows company-derived boards such as:
-   *
-   * Tebra → tebra
-   *
-   * to be explicitly verified before job matching.
-   */
-  const boardExists =
-    await probeGreenhouseBoard(
-      identifier
-    );
-
-
-  if (
-    !boardExists
-  ) {
-    console.log(
-      "Greenhouse: board not found:",
-      identifier
-    );
-
-    return null;
-  }
-
-
-  console.log(
-    "Greenhouse: board verified:",
-    identifier
-  );
-
-
   const jobs =
     await fetchGreenhouseJobs(
       identifier,
@@ -3271,8 +3429,19 @@ async function resolveGreenhouseOnBoard(
   if (
     !jobs.length
   ) {
+    console.log(
+      "Greenhouse: no public jobs returned for board:",
+      identifier
+    );
+
     return null;
   }
+
+
+  console.log(
+    "Greenhouse: public board verified:",
+    identifier
+  );
 
 
   const identifierConfidence =
