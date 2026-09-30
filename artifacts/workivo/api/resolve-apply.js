@@ -585,24 +585,6 @@ const STOP_WORDS = new Set([
  * =========================================================
  * TITLE SEMANTIC GROUPS
  * =========================================================
- *
- * These are intentionally conservative.
- *
- * They prevent:
- *
- * Senior Software Engineer
- *        from being treated like
- * Software Engineer
- *
- * Backend Software Engineer
- *        from being treated like
- * Frontend Software Engineer
- *
- * Product Manager
- *        from being treated like
- * Product Designer
- *
- * =========================================================
  */
 
 const TITLE_LEVEL_GROUPS = [
@@ -797,12 +779,6 @@ function tokenSet(value = "") {
 }
 
 
-/*
- * Numeric job levels are only two characters/one token,
- * so tokenSet() would otherwise filter "1" out.
- *
- * This version preserves level tokens.
- */
 function titleTokenSet(value = "") {
   return new Set(
     normalizeTitle(value)
@@ -868,30 +844,6 @@ function jaccardSimilarity(a, b) {
  * =========================================================
  * STRICT TITLE SIMILARITY
  * =========================================================
- *
- * IMPORTANT:
- *
- * This replaces the old loose containment rule.
- *
- * The old rule could do this:
- *
- * "Software Engineer"
- * "Senior Software Engineer"
- *
- * => 0.95
- *
- * That is too permissive.
- *
- * Now:
- *
- * - exact normalized title = 1
- * - same level + same role family = strong
- * - missing/extra level = capped
- * - conflicting levels = rejected
- * - conflicting specializations = rejected
- * - different core roles = rejected
- *
- * =========================================================
  */
 
 function titleSimilarity(a, b) {
@@ -939,10 +891,6 @@ function titleSimilarity(a, b) {
       TITLE_LEVEL_GROUPS
     );
 
-  /*
-   * If both titles contain a level and they are different,
-   * they are not the same job level.
-   */
   if (
     firstLevel &&
     secondLevel &&
@@ -951,10 +899,6 @@ function titleSimilarity(a, b) {
     return 0.25;
   }
 
-  /*
-   * If only one title contains a meaningful level,
-   * do not allow it to become a near-exact match.
-   */
   const levelMismatch =
     Boolean(
       firstLevel
@@ -1002,9 +946,6 @@ function titleSimilarity(a, b) {
     }
   }
 
-  /*
-   * Detect conflicting specialization families.
-   */
   if (
     firstSpecializations.length &&
     secondSpecializations.length
@@ -1063,10 +1004,6 @@ function titleSimilarity(a, b) {
       secondTokens.size
     );
 
-  /*
-   * Containment remains useful only when the semantic
-   * groups are compatible.
-   */
   if (
     smallerSize >= 2 &&
     intersection ===
@@ -2276,14 +2213,6 @@ async function getHimalayasJob(
  * =========================================================
  * GREENHOUSE COMPANY IDENTIFIERS
  * =========================================================
- *
- * Evidence-backed board token goes first.
- *
- * The fallback list intentionally does NOT blindly search
- * every individual company word.
- *
- * That reduces false-positive Greenhouse boards.
- * =========================================================
  */
 
 function companyIdentifiers(
@@ -2442,11 +2371,7 @@ function companyIdentifiers(
 
   /*
    * Do NOT add every individual company token.
-   *
-   * That old behavior could turn a multi-word company into
-   * unrelated Greenhouse board guesses.
    */
-
 
   const filtered =
     values.filter(
@@ -2580,10 +2505,6 @@ function scoreProviderJob(
       : 0.5;
 
 
-  /*
-   * Description is now a supporting signal rather than
-   * something capable of destroying a strong title match.
-   */
   const descriptionScore =
     providerJob.description
       ? jaccardSimilarity(
@@ -2603,12 +2524,6 @@ function scoreProviderJob(
       : 0;
 
 
-  /*
-   * Title carries the most weight.
-   *
-   * This is deliberate because Greenhouse frequently has
-   * sparse salary/description information.
-   */
   const score =
     titleScore * 0.70 +
 
@@ -2645,21 +2560,6 @@ function scoreProviderJob(
 /*
  * =========================================================
  * EXACT GREENHOUSE VERIFICATION SCORING
- * =========================================================
- *
- * Exact Greenhouse job ID is much stronger than generic
- * similarity.
- *
- * We therefore do NOT force it through the ordinary
- * weighted score.
- *
- * We still verify:
- *
- * - title compatibility
- * - location compatibility
- *
- * Missing salary/description does NOT kill exact ID
- * verification.
  * =========================================================
  */
 
@@ -2782,10 +2682,6 @@ function scoreExactGreenhouseJob(
       : 0;
 
 
-  /*
-   * Exact ID itself represents the strongest evidence.
-   * Score remains useful for response metadata only.
-   */
   const score =
     titleScore * 0.80 +
 
@@ -2936,6 +2832,77 @@ function greenhouseJobIdsMatch(
 
 /*
  * =========================================================
+ * GREENHOUSE BOARD PROBE
+ * =========================================================
+ *
+ * SURGICAL DISCOVERY FIX
+ *
+ * Before spending time searching a candidate identifier,
+ * verify that the identifier actually exposes a public
+ * Greenhouse board.
+ *
+ * Example:
+ *
+ * Tebra
+ *   ↓
+ * tebra
+ *   ↓
+ * Greenhouse board probe
+ *   ↓
+ * board exists
+ *   ↓
+ * search Tebra jobs
+ *
+ * This does NOT produce the final application URL.
+ *
+ * The final application URL must still come from the
+ * Greenhouse jobs API.
+ * =========================================================
+ */
+
+async function probeGreenhouseBoard(
+  identifier
+) {
+  const cleaned =
+    String(
+      identifier || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  if (!cleaned) {
+    return false;
+  }
+
+  const endpoint =
+    `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(
+      cleaned
+    )}/jobs?content=false`;
+
+  const result =
+    await fetchJson(
+      endpoint,
+      {},
+      6000,
+      1
+    );
+
+  if (
+    !result.ok ||
+    !result.data ||
+    !Array.isArray(
+      result.data.jobs
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+
+/*
+ * =========================================================
  * GREENHOUSE JOB FETCH
  * =========================================================
  */
@@ -3068,12 +3035,6 @@ async function fetchGreenhouseJobs(
     }
 
 
-    /*
-     * Preserve the existing defensive behavior:
-     * a normal short response is considered complete.
-     *
-     * Large responses may justify defensive page checks.
-     */
     if (
       page === 1 &&
       jobs.length < 100
@@ -3261,6 +3222,45 @@ async function resolveGreenhouseOnBoard(
   } = options;
 
 
+  /*
+   * =======================================================
+   * SURGICAL BOARD DISCOVERY FIX
+   * =======================================================
+   *
+   * Verify that this identifier actually corresponds to a
+   * public Greenhouse board before doing the deeper job
+   * search.
+   *
+   * This allows company-derived boards such as:
+   *
+   * Tebra → tebra
+   *
+   * to be explicitly verified before job matching.
+   */
+  const boardExists =
+    await probeGreenhouseBoard(
+      identifier
+    );
+
+
+  if (
+    !boardExists
+  ) {
+    console.log(
+      "Greenhouse: board not found:",
+      identifier
+    );
+
+    return null;
+  }
+
+
+  console.log(
+    "Greenhouse: board verified:",
+    identifier
+  );
+
+
   const jobs =
     await fetchGreenhouseJobs(
       identifier,
@@ -3288,9 +3288,6 @@ async function resolveGreenhouseOnBoard(
    * PASS 1
    * Exact Greenhouse job ID
    * =======================================================
-   *
-   * Only use the ID as decisive evidence when it came from
-   * a known Greenhouse application destination.
    */
 
   const requestedGreenhouseJobId =
@@ -3331,12 +3328,6 @@ async function resolveGreenhouseOnBoard(
       if (
         !exactScore.valid
       ) {
-        /*
-         * The ID exists, but the job title/location does not
-         * agree strongly enough with the Himalayas listing.
-         *
-         * Do not blindly accept it.
-         */
         continue;
       }
 
@@ -3569,11 +3560,6 @@ async function resolveGreenhouse(
    * PHASE 2
    * CONTROLLED FALLBACK IDENTIFIERS
    * =======================================================
-   *
-   * Only now do we try guessed board identifiers.
-   *
-   * The known Greenhouse board token is removed so we don't
-   * query it twice.
    */
 
   const fallbackIdentifiers =
@@ -3610,9 +3596,6 @@ async function resolveGreenhouse(
 
   /*
    * Do these sequentially, not Promise.all().
-   *
-   * This gives us controlled request depth and allows us to
-   * stop immediately once a verified match is found.
    */
   for (
     const identifier
@@ -3631,10 +3614,6 @@ async function resolveGreenhouse(
           maxPages:
             GREENHOUSE_FALLBACK_MAX_PAGES,
 
-          /*
-           * A job ID without a known board is not strong
-           * enough to be treated as exact evidence.
-           */
           allowExactJobId:
             false,
         }
@@ -3715,14 +3694,6 @@ async function resolveUniversal(
     return null;
   }
 
-
-  /*
-   * There is only one provider.
-   *
-   * We intentionally keep the provider architecture so the
-   * resolver can remain clean and expandable later without
-   * enabling other providers today.
-   */
 
   for (
     const provider
@@ -4194,11 +4165,6 @@ export default async function handler(
      * =====================================================
      * GREENHOUSE EVIDENCE
      * =====================================================
-     *
-     * First use the Himalayas API's applicationLink.
-     *
-     * If that is unavailable, inspect the actual Himalayas
-     * page HTML for Greenhouse evidence.
      */
 
     let greenhouseEvidence =
@@ -4209,12 +4175,6 @@ export default async function handler(
       );
 
 
-    /*
-     * HTML evidence fallback.
-     *
-     * This is only executed when the API did not give us
-     * usable Greenhouse evidence.
-     */
     if (
       !greenhouseEvidence ||
       (
@@ -4309,11 +4269,6 @@ export default async function handler(
           ? himalayasJob.locationRestrictions
           : [],
 
-      /*
-       * Greenhouse evidence.
-       *
-       * These are evidence only.
-       */
       greenhouseBoardToken:
         greenhouseEvidence?.boardToken ||
         "",
