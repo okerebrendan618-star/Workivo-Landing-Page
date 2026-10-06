@@ -59,6 +59,34 @@ export default function DashboardContent() {
 
   const [matchingJobs, setMatchingJobs] =
     useState<any[]>([]);
+/* =========================================================
+   JOB TRACKER STATE
+   ========================================================= */
+
+const [trackerApplications, setTrackerApplications] =
+  useState<any[]>([]);
+
+const [trackerCompany, setTrackerCompany] =
+  useState("");
+
+const [trackerJobTitle, setTrackerJobTitle] =
+  useState("");
+
+const [trackerJobUrl, setTrackerJobUrl] =
+  useState("");
+
+const [trackerStatus, setTrackerStatus] =
+  useState("Applied");
+
+const [trackerNotes, setTrackerNotes] =
+  useState("");
+
+const [isTrackerLoading, setIsTrackerLoading] =
+  useState(false);
+
+const [isTrackerSaving, setIsTrackerSaving] =
+  useState(false);  
+  
 
   /* =========================================================
      WORKIVO BOT UI
@@ -414,15 +442,16 @@ export default function DashboardContent() {
     let isMounted = true;
 
     const load = async () => {
-      try {
-        await loadPersistentDashboardData();
-      } catch (error) {
-        console.error(
-          "DASHBOARD DATA LOAD ERROR:",
-          error
-        );
-      }
-    };
+  try {
+    await loadPersistentDashboardData();
+    await loadTrackerApplications();
+  } catch (error) {
+    console.error(
+      "DASHBOARD DATA LOAD ERROR:",
+      error
+    );
+  }
+};
 
     if (isMounted) {
       load();
@@ -1098,7 +1127,272 @@ export default function DashboardContent() {
 
     openWorkspace("tracker");
   };
+/* =========================================================
+   JOB TRACKER PIPELINE
 
+   Flow:
+
+   Dashboard
+      ↓
+   Supabase Edge Function
+      ↓
+   Make Job Tracker Webhook
+      ↓
+   Supabase job_tracker
+      ↓
+   Dashboard
+
+   IMPORTANT:
+   The frontend NEVER calls Make directly.
+   The Make webhook URL stays inside Supabase.
+   ========================================================= */
+
+const loadTrackerApplications = async () => {
+  setIsTrackerLoading(true);
+
+  try {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      throw new Error(
+        authError?.message ||
+          "Please login again before loading your applications."
+      );
+    }
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("job_tracker")
+      .select(
+        "id, company, job_title, job_url, status, notes, created_at"
+      )
+      .eq("user_id", user.id)
+      .order("created_at", {
+        ascending: false,
+      });
+
+    if (error) {
+      throw new Error(
+        `Unable to load your applications: ${error.message}`
+      );
+    }
+
+    setTrackerApplications(
+      Array.isArray(data) ? data : []
+    );
+  } catch (error) {
+    console.error(
+      "JOB TRACKER LOAD ERROR:",
+      error
+    );
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "Unable to load your applications."
+    );
+  } finally {
+    setIsTrackerLoading(false);
+  }
+};
+
+const handleAddTrackerApplication = async () => {
+  if (isTrackerSaving) return;
+
+  const company = trackerCompany.trim();
+  const jobTitle = trackerJobTitle.trim();
+  const jobUrl = trackerJobUrl.trim();
+  const status = trackerStatus.trim();
+  const notes = trackerNotes.trim();
+
+  if (!company) {
+    alert("Please enter the company name.");
+    return;
+  }
+
+  if (!jobTitle) {
+    alert("Please enter the job title.");
+    return;
+  }
+
+  if (!jobUrl) {
+    alert("Please enter the job URL.");
+    return;
+  }
+
+  if (!/^https?:\/\//i.test(jobUrl)) {
+    alert("Please enter a valid job URL.");
+    return;
+  }
+
+  if (!status) {
+    alert("Please select an application status.");
+    return;
+  }
+
+  if (!canUseTracker) {
+    alert(
+      "You have reached your free application tracker limit."
+    );
+    return;
+  }
+
+  setIsTrackerSaving(true);
+
+  try {
+    /*
+     * The frontend sends only application data.
+     *
+     * user_id is intentionally NOT sent.
+     *
+     * The Supabase Edge Function gets the authenticated
+     * user from the Supabase session and owns the identity.
+     */
+    const {
+      data,
+      error,
+    } = await supabase.functions.invoke(
+      "job-tracker",
+      {
+        body: {
+          company,
+          job_title: jobTitle,
+          job_url: jobUrl,
+          status,
+          notes,
+        },
+      }
+    );
+
+    if (error) {
+      console.error(
+        "JOB TRACKER FUNCTION ERROR:",
+        error
+      );
+
+      throw new Error(
+        error.message ||
+          "Application tracking request failed."
+      );
+    }
+
+    if (
+      !data ||
+      typeof data !== "object"
+    ) {
+      throw new Error(
+        "Invalid application tracker response."
+      );
+    }
+
+    /*
+     * The Edge Function returns one of the final server
+     * outcomes:
+     *
+     * TRACKED
+     * DUPLICATE
+     * LIMIT_REACHED
+     */
+
+    const result =
+      typeof data.result === "string"
+        ? data.result.trim()
+        : "";
+
+    if (result === "LIMIT_REACHED") {
+      setUsage((previousUsage) => ({
+        ...previousUsage,
+        trackedApplications: FREE_LIMITS.trackedApplications,
+      }));
+
+      alert(
+        "You have reached your free application tracker limit."
+      );
+
+      return;
+    }
+
+    if (result === "DUPLICATE") {
+      alert(
+        "This application is already in your tracker."
+      );
+
+      await loadTrackerApplications();
+      return;
+    }
+
+    if (result !== "TRACKED") {
+      throw new Error(
+        typeof data.message === "string" &&
+          data.message.trim()
+          ? data.message.trim()
+          : "The application could not be added."
+      );
+    }
+
+    /*
+     * The server is the source of truth for usage.
+     * Do not increment the counter locally.
+     */
+    const serverTrackedCount =
+      Number(
+        data?.usage?.tracked_applications
+      );
+
+    if (
+      !Number.isFinite(serverTrackedCount) ||
+      serverTrackedCount < 0
+    ) {
+      throw new Error(
+        "Application tracker response did not contain valid usage information."
+      );
+    }
+
+    setUsage((previousUsage) => ({
+      ...previousUsage,
+      trackedApplications:
+        Math.min(
+          FREE_LIMITS.trackedApplications,
+          serverTrackedCount
+        ),
+    }));
+
+    /*
+     * Reload from Supabase so the UI displays the actual
+     * persisted tracker record rather than trusting the
+     * frontend request body.
+     */
+    await loadTrackerApplications();
+
+    setTrackerCompany("");
+    setTrackerJobTitle("");
+    setTrackerJobUrl("");
+    setTrackerStatus("Applied");
+    setTrackerNotes("");
+
+    alert(
+      "Application added to your tracker successfully!"
+    );
+  } catch (error) {
+    console.error(
+      "JOB TRACKER ERROR:",
+      error
+    );
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "Unable to add this application."
+    );
+  } finally {
+    setIsTrackerSaving(false);
+  }
+};
   /* =========================================================
      JOB MATCHING
 
@@ -3059,9 +3353,17 @@ const renderMatchingWorkspace = () => {
    TRACKER WORKSPACE
    ========================================================= */
 
+/* =========================================================
+   TRACKER WORKSPACE
+   ========================================================= */
+
 const renderTrackerWorkspace = () => {
   return (
     <div className="space-y-6">
+      {/* ---------------------------------------------------
+         HEADER
+         --------------------------------------------------- */}
+
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-medium text-orange-600 dark:text-orange-400">
@@ -3087,47 +3389,273 @@ const renderTrackerWorkspace = () => {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
+        {/* -------------------------------------------------
+           APPLICATIONS
+           ------------------------------------------------- */}
+
         <div className="relative overflow-hidden rounded-2xl border border-orange-200/50 bg-white/70 p-6 shadow-sm backdrop-blur-xl dark:border-orange-500/10 dark:bg-slate-900/65 lg:col-span-2">
           <div className="pointer-events-none absolute -right-20 -top-20 h-48 w-48 rounded-full bg-orange-500/5 blur-3xl" />
 
-          <div className="relative flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-orange-100 bg-orange-50 text-orange-600 dark:border-orange-500/10 dark:bg-orange-500/10 dark:text-orange-400">
-              <ClipboardList className="h-5 w-5" />
+          <div className="relative flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-orange-100 bg-orange-50 text-orange-600 dark:border-orange-500/10 dark:bg-orange-500/10 dark:text-orange-400">
+                <ClipboardList className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">
+                  Your Applications
+                </h3>
+
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Track the jobs you have applied for.
+                </p>
+              </div>
             </div>
 
-            <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">
-                Your Applications
-              </h3>
-
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Track the jobs you have applied for.
-              </p>
-            </div>
+            <span className="rounded-full border border-orange-100 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 dark:border-orange-500/10 dark:bg-orange-500/10 dark:text-orange-400">
+              {trackerApplications.length} tracked
+            </span>
           </div>
 
-          <div className="relative mt-8 rounded-xl border border-dashed border-slate-300 bg-slate-50/50 p-10 text-center dark:border-slate-700 dark:bg-slate-800/30">
-            <ClipboardList className="mx-auto h-9 w-9 text-slate-400" />
+          {/* -------------------------------------------------
+             ADD APPLICATION FORM
+             ------------------------------------------------- */}
 
-            <h3 className="mt-4 font-semibold text-slate-900 dark:text-white">
-              No applications tracked yet
-            </h3>
+          <div className="relative mt-8 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-800/40">
+            <div className="flex items-center gap-2">
+              <Plus className="h-4 w-4 text-orange-500" />
 
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500 dark:text-slate-400">
-              Your application tracker is ready for the next stage of
-              your job search.
-            </p>
+              <h4 className="font-semibold text-slate-900 dark:text-white">
+                Add Application
+              </h4>
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label>
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Company
+                </span>
+
+                <input
+                  type="text"
+                  value={trackerCompany}
+                  onChange={(event) =>
+                    setTrackerCompany(
+                      event.target.value
+                    )
+                  }
+                  placeholder="Company name"
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </label>
+
+              <label>
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Job Title
+                </span>
+
+                <input
+                  type="text"
+                  value={trackerJobTitle}
+                  onChange={(event) =>
+                    setTrackerJobTitle(
+                      event.target.value
+                    )
+                  }
+                  placeholder="e.g. Software Engineer"
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </label>
+
+              <label className="sm:col-span-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Job URL
+                </span>
+
+                <input
+                  type="url"
+                  value={trackerJobUrl}
+                  onChange={(event) =>
+                    setTrackerJobUrl(
+                      event.target.value
+                    )
+                  }
+                  placeholder="https://..."
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </label>
+
+              <label>
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Status
+                </span>
+
+                <select
+                  value={trackerStatus}
+                  onChange={(event) =>
+                    setTrackerStatus(
+                      event.target.value
+                    )
+                  }
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                >
+                  <option value="Applied">
+                    Applied
+                  </option>
+
+                  <option value="Interview">
+                    Interview
+                  </option>
+
+                  <option value="Offer">
+                    Offer
+                  </option>
+
+                  <option value="Rejected">
+                    Rejected
+                  </option>
+
+                  <option value="Withdrawn">
+                    Withdrawn
+                  </option>
+                </select>
+              </label>
+
+              <label>
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Notes
+                </span>
+
+                <input
+                  type="text"
+                  value={trackerNotes}
+                  onChange={(event) =>
+                    setTrackerNotes(
+                      event.target.value
+                    )
+                  }
+                  placeholder="Optional notes"
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </label>
+            </div>
 
             <button
               type="button"
-              disabled
-              className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 py-3 text-sm font-semibold text-white opacity-50"
+              onClick={handleAddTrackerApplication}
+              disabled={
+                isTrackerSaving ||
+                !canUseTracker
+              }
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Plus className="h-4 w-4" />
-              Add Application
+              {isTrackerSaving ? (
+                <>
+                  <Activity className="h-4 w-4 animate-pulse" />
+                  Adding Application...
+                </>
+              ) : (
+                <>
+                  <Plus className="h-4 w-4" />
+                  Add Application
+                </>
+              )}
             </button>
+
+            <p className="mt-3 text-center text-xs text-slate-400">
+              {usage.trackedApplications}/
+              {FREE_LIMITS.trackedApplications} free applications used
+            </p>
+          </div>
+
+          {/* -------------------------------------------------
+             APPLICATION LIST
+             ------------------------------------------------- */}
+
+          <div className="relative mt-6 space-y-3">
+            {isTrackerLoading ? (
+              <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
+                <Activity className="mx-auto h-7 w-7 animate-pulse text-orange-500" />
+
+                <p className="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">
+                  Loading your applications...
+                </p>
+              </div>
+            ) : trackerApplications.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-700">
+                <ClipboardList className="mx-auto h-9 w-9 text-slate-400" />
+
+                <h3 className="mt-4 font-semibold text-slate-900 dark:text-white">
+                  No applications tracked yet
+                </h3>
+
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  Add your first application above and
+                  Workivo will keep it organized for you.
+                </p>
+              </div>
+            ) : (
+              trackerApplications.map(
+                (application: any) => (
+                  <div
+                    key={application.id}
+                    className="rounded-xl border border-slate-200/80 bg-white/80 p-4 shadow-sm transition-all duration-200 hover:border-orange-200 hover:shadow-md dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-orange-500/20"
+                  >
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <h4 className="text-base font-bold text-slate-900 dark:text-white">
+                          {application.job_title}
+                        </h4>
+
+                        <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-300">
+                          {application.company}
+                        </p>
+
+                        {application.notes && (
+                          <p className="mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                            {application.notes}
+                          </p>
+                        )}
+
+                        {application.created_at && (
+                          <p className="mt-3 text-xs text-slate-400">
+                            Added{" "}
+                            {new Date(
+                              application.created_at
+                            ).toLocaleDateString()}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+                        <span className="rounded-full bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-700 dark:bg-orange-500/10 dark:text-orange-400">
+                          {application.status}
+                        </span>
+
+                        {application.job_url && (
+                          <a
+                            href={application.job_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 transition hover:text-orange-600 dark:text-slate-400 dark:hover:text-orange-400"
+                          >
+                            View Job
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              )
+            )}
           </div>
         </div>
+
+        {/* -------------------------------------------------
+           TRACKER SIDEBAR
+           ------------------------------------------------- */}
 
         <div className="space-y-4">
           <div className="group relative overflow-hidden rounded-2xl border border-orange-200/50 bg-white/70 p-6 shadow-sm backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_14px_40px_rgba(249,115,22,0.08)] dark:border-orange-500/10 dark:bg-slate-900/65">
@@ -3144,12 +3672,26 @@ const renderTrackerWorkspace = () => {
             </div>
 
             <p className="relative mt-4 text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
-              {usage.trackedApplications}
+              {trackerApplications.length}
             </p>
 
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Applications currently tracked.
             </p>
+
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+              <div
+                className="h-full rounded-full bg-orange-500 transition-all duration-300"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (trackerApplications.length /
+                      FREE_LIMITS.trackedApplications) *
+                      100
+                  )}%`,
+                }}
+              />
+            </div>
           </div>
 
           <div className="group relative overflow-hidden rounded-2xl border border-blue-200/50 bg-white/70 p-6 shadow-sm backdrop-blur-xl transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_14px_40px_rgba(37,99,235,0.08)] dark:border-blue-500/10 dark:bg-slate-900/65">
@@ -3166,8 +3708,8 @@ const renderTrackerWorkspace = () => {
             </div>
 
             <p className="relative mt-3 text-sm leading-6 text-slate-500 dark:text-slate-400">
-              Keep your applications, interview stages, and job-search
-              progress organized as you apply.
+              Keep your applications, interview stages,
+              and job-search progress organized as you apply.
             </p>
           </div>
         </div>
@@ -3175,138 +3717,6 @@ const renderTrackerWorkspace = () => {
     </div>
   );
 };
-
-/* =========================================================
-   FLOATING WORKIVO BOT
-   ========================================================= */
-
-const renderBotWorkspace = () => {
-  return (
-    <div className="fixed bottom-[82px] right-5 z-50 flex h-[580px] w-[min(420px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-3xl border border-slate-200/70 bg-white/90 shadow-[0_30px_90px_rgba(15,23,42,0.28),0_0_50px_rgba(124,58,237,0.08)] backdrop-blur-2xl dark:border-slate-700/70 dark:bg-slate-900/90 dark:shadow-[0_30px_90px_rgba(0,0,0,0.45),0_0_50px_rgba(124,58,237,0.10)] sm:right-6">
-      <div className="relative flex items-center justify-between border-b border-slate-200/70 px-5 py-4 dark:border-slate-800">
-        <div className="pointer-events-none absolute left-1/2 top-0 h-24 w-48 -translate-x-1/2 rounded-full bg-violet-500/10 blur-3xl" />
-
-        <div className="relative flex items-center gap-3">
-          <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-purple-600 to-blue-500 text-white shadow-[0_0_25px_rgba(139,92,246,0.35)]">
-            <div className="absolute inset-0 rounded-xl bg-white/10" />
-            <Bot className="relative h-5 w-5" />
-          </div>
-
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="font-bold text-slate-900 dark:text-white">
-                Workivo AI
-              </h2>
-
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
-            </div>
-
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Your resume co-pilot
-            </p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setIsBotOpen(false)}
-          className="relative rounded-xl border border-slate-200/80 bg-white/60 p-2 text-slate-500 transition-all duration-200 hover:-translate-y-0.5 hover:border-violet-200 hover:bg-white hover:text-violet-500 dark:border-slate-800 dark:bg-slate-800/60 dark:hover:border-violet-500/20 dark:hover:bg-slate-800"
-        >
-          <X className="h-5 w-5" />
-        </button>
-      </div>
-
-      <div className="flex-1 space-y-4 overflow-y-auto p-5">
-        {botMessages.length === 0 ? (
-          <div className="flex min-h-[420px] items-center justify-center text-center">
-            <div className="max-w-md">
-              <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/10 to-blue-500/10 text-violet-600 shadow-[0_0_35px_rgba(139,92,246,0.10)] dark:text-violet-400">
-                <div className="absolute inset-0 rounded-2xl border border-violet-300/20 dark:border-violet-500/10" />
-                <Bot className="relative h-7 w-7" />
-              </div>
-
-              <h3 className="mt-5 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
-                How can I help?
-              </h3>
-
-              <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                Ask Workivo about your resume, ATS score, job search,
-                or application strategy.
-              </p>
-
-              <div className="mt-5 flex flex-wrap justify-center gap-2">
-                <span className="rounded-full border border-slate-200/70 bg-white/60 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
-                  Resume help
-                </span>
-
-                <span className="rounded-full border border-slate-200/70 bg-white/60 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
-                  ATS advice
-                </span>
-
-                <span className="rounded-full border border-slate-200/70 bg-white/60 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
-                  Job search
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          botMessages.map(
-            (
-              message: {
-                role: "user" | "assistant";
-                text: string;
-              },
-              index: number
-            ) => (
-              <div
-                key={index}
-                className={`flex ${
-                  message.role === "user"
-                    ? "justify-end"
-                    : "justify-start"
-                }`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${
-                    message.role === "user"
-                      ? "bg-gradient-to-r from-violet-600 to-blue-600 text-white shadow-[0_8px_20px_rgba(124,58,237,0.15)]"
-                      : "border border-slate-200/70 bg-slate-100/80 text-slate-700 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300"
-                  }`}
-                >
-                  {message.text}
-                </div>
-              </div>
-            )
-          )
-        )}
-      </div>
-
-      <div className="border-t border-slate-200/70 p-4 dark:border-slate-800">
-        <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-white/70 p-2 shadow-sm backdrop-blur-md transition-all duration-200 focus-within:border-violet-300 focus-within:shadow-[0_0_20px_rgba(139,92,246,0.08)] dark:border-slate-700 dark:bg-slate-950/60 dark:focus-within:border-violet-500/30">
-          <input
-            value={botInput}
-            onChange={(event) =>
-              setBotInput(event.target.value)
-            }
-            onKeyDown={handleBotKeyDown}
-            placeholder="Ask Workivo anything..."
-            className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-white"
-          />
-
-          <button
-            type="button"
-            onClick={handleBotSubmit}
-            disabled={!botInput.trim()}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white shadow-[0_5px_18px_rgba(124,58,237,0.20)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_22px_rgba(124,58,237,0.30)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 /* =========================================================
    WORKSPACE ROUTER
    ========================================================= */
