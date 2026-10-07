@@ -1257,7 +1257,7 @@ const handleAddTrackerApplication = async () => {
       data,
       error,
     } = await supabase.functions.invoke(
-      "job-tracker",
+      "Job_tracker",
       {
         body: {
           company,
