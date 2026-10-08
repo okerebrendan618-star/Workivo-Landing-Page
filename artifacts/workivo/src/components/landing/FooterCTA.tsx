@@ -7,6 +7,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'wouter';
 
 function CountUp({
   value,
@@ -64,6 +65,8 @@ const stats = [
 ];
 
 export default function FooterCTA() {
+  const [, setLocation] = useLocation();
+  
   return (
     <section className="py-32 md:py-40 relative overflow-hidden flex flex-col items-center justify-center">
 
@@ -242,6 +245,7 @@ export default function FooterCTA() {
           className="flex flex-col items-center w-full"
         >
           <motion.button
+            onClick={() => setLocation('/signup')}
             whileHover={{
               scale: 1.025,
             }}
