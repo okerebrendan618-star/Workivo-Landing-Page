@@ -802,47 +802,28 @@ const [isTrackerSaving, setIsTrackerSaving] =
         );
       }
 
+      const nextTailoredCount =
+        usage.tailoredResumes + 1;
+
       /*
- * Update the dashboard immediately after the tailored resume
- * has been successfully inserted into Supabase.
- *
- * This ensures a usage-counter error does not prevent the
- * newly generated resume from appearing in the current UI.
- */
-setTailoredResume(tailoredText);
+       * Persist usage only after the tailored resume itself has
+       * been saved successfully.
+       */
+      await persistUsage(user.id, {
+        ...usage,
+        tailoredResumes: nextTailoredCount,
+      });
 
-const nextTailoredCount =
-  usage.tailoredResumes + 1;
+      setTailoredResume(tailoredText);
 
-setUsage((previousUsage) => ({
-  ...previousUsage,
-  tailoredResumes: nextTailoredCount,
-}));
+      setUsage((previousUsage) => ({
+        ...previousUsage,
+        tailoredResumes: nextTailoredCount,
+      }));
 
-/*
- * Persist the usage counter after the resume has been saved.
- */
-try {
-  await persistUsage(user.id, {
-    ...usage,
-    tailoredResumes: nextTailoredCount,
-  });
-} catch (usageError) {
-  console.error(
-    "TAILORED RESUME SAVED, BUT USAGE PERSISTENCE FAILED:",
-    usageError
-  );
-
-  alert(
-    "Your tailored resume was saved, but your credit count could not be saved. Please refresh only after we resolve the usage-sync issue."
-  );
-
-  return;
-}
-
-alert(
-  "Your resume has been tailored and saved successfully!"
-);
+      alert(
+        "Your resume has been tailored and saved successfully!"
+      );
     } catch (error) {
       console.error(
         "TAILOR RESUME ERROR:",
