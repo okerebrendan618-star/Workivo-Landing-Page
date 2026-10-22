@@ -737,17 +737,58 @@ const [isTrackerSaving, setIsTrackerSaving] =
       );
 
       if (error) {
-        console.error(
-          "TAILOR FUNCTION ERROR:",
-          error
-        );
+  console.error(
+    "TAILOR FUNCTION ERROR DETAILS:",
+    {
+      message: error.message,
+      name: error.name,
+      context: error.context,
+      cause: error.cause,
+    }
+  );
 
-        throw new Error(
-          error.message ||
-            "AI resume tailoring failed."
-        );
+  let detailedMessage = error.message;
+
+  // Supabase Functions errors can contain an HTTP response
+  // with a more useful error body.
+  const context = error.context;
+
+  if (context instanceof Response) {
+    try {
+      const responseText = await context.clone().text();
+
+      console.error(
+        "TAILOR FUNCTION HTTP RESPONSE:",
+        {
+          status: context.status,
+          statusText: context.statusText,
+          body: responseText,
+        }
+      );
+
+      if (responseText) {
+        try {
+          const responseBody = JSON.parse(responseText);
+
+          if (typeof responseBody.error === "string") {
+            detailedMessage = responseBody.error;
+          }
+        } catch {
+          detailedMessage = responseText;
+        }
       }
+    } catch (readError) {
+      console.error(
+        "Could not read Tailored Resume error response:",
+        readError
+      );
+    }
+  }
 
+  throw new Error(
+    detailedMessage || "AI resume tailoring failed."
+  );
+}
       if (!data || typeof data !== "object") {
         throw new Error(
           "Invalid AI tailoring response."
