@@ -319,20 +319,23 @@ const [isTrackerSaving, setIsTrackerSaving] =
     if (!user) return;
 
     const [
-      latestResumeResult,
-      resumeCountResult,
-      usageResult,
-      tailoredResult,
-    ] = await Promise.all([
+  latestResumeResult,
+  resumeCountResult,
+  usageResult,
+  subscriptionUsageResult,
+  tailoredResult,
+] = await Promise.all([
       supabase
-        .from("resumes")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("created_at", {
-          ascending: false,
-        })
-        .limit(1)
-        .maybeSingle(),
+  .from("subscription_usage")
+  .select("tailored_resumes, period_start")
+  .eq(
+    "period_start",
+    `${new Date().getFullYear()}-${String(
+      new Date().getMonth() + 1
+    ).padStart(2, "0")}-01`
+  )
+  .eq("user_id", user.id)
+  .maybeSingle(),
 
       supabase
         .from("resumes")
@@ -392,8 +395,9 @@ const [isTrackerSaving, setIsTrackerSaving] =
           Number(usageResult.data.ats_scans) || 0,
 
         tailoredResumes:
-          Number(usageResult.data.tailored_resumes) || 0,
-
+  Number(
+    subscriptionUsageResult.data?.tailored_resumes
+  ) || 0,
         jobMatches:
           Number(usageResult.data.job_matches) || 0,
 
@@ -417,6 +421,12 @@ const [isTrackerSaving, setIsTrackerSaving] =
         );
       }
     }
+    if (subscriptionUsageResult.error) {
+  console.error(
+    "SUBSCRIPTION USAGE LOAD ERROR:",
+    subscriptionUsageResult.error
+  );
+}
 
     if (tailoredResult.error) {
       console.error(
@@ -843,24 +853,59 @@ const [isTrackerSaving, setIsTrackerSaving] =
         );
       }
 
-      const nextTailoredCount =
-        usage.tailoredResumes + 1;
-
       /*
-       * Persist usage only after the tailored resume itself has
-       * been saved successfully.
-       */
-      await persistUsage(user.id, {
-        ...usage,
-        tailoredResumes: nextTailoredCount,
-      });
+ * The Tailored Resume Edge Function is responsible for
+ * enforcing and consuming subscription usage.
+ *
+ * Do not increment or persist the legacy user_usage counter
+ * here, because that would create a second source of truth.
+ */
+setTailoredResume(tailoredText);
 
-      setTailoredResume(tailoredText);
+setUsage((previousUsage) => ({
+  ...previousUsage,
+  tailoredResumes: Math.min(
+    FREE_LIMITS.tailoredResumes,
+    previousUsage.tailoredResumes + 1
+  ),
+}));
 
-      setUsage((previousUsage) => ({
-        ...previousUsage,
-        tailoredResumes: nextTailoredCount,
-      }));
+// Reload the persisted monthly subscription usage so the
+// displayed count reflects the backend's recorded value.
+const {
+  data: { user: currentUser },
+} = await supabase.auth.getUser();
+
+if (currentUser) {
+  const currentDate = new Date();
+  const periodStart = `${currentDate.getFullYear()}-${String(
+    currentDate.getMonth() + 1
+  ).padStart(2, "0")}-01`;
+
+  const {
+    data: subscriptionUsage,
+    error: subscriptionUsageError,
+  } = await supabase
+    .from("subscription_usage")
+    .select("tailored_resumes")
+    .eq("user_id", currentUser.id)
+    .eq("period_start", periodStart)
+    .maybeSingle();
+
+  if (subscriptionUsageError) {
+    console.error(
+      "TAILORED RESUME USAGE REFRESH ERROR:",
+      subscriptionUsageError
+    );
+  } else if (subscriptionUsage) {
+    setUsage((previousUsage) => ({
+      ...previousUsage,
+      tailoredResumes: Number(
+        subscriptionUsage.tailored_resumes
+      ) || 0,
+    }));
+  }
+}
 
       alert(
         "Your resume has been tailored and saved successfully!"
@@ -880,6 +925,163 @@ const [isTrackerSaving, setIsTrackerSaving] =
       setIsTailoring(false);
     }
   };
+  /* =========================================================
+   TAILORED RESUME PDF EXPORT
+   ========================================================= */
+
+const handleExportTailoredResume = () => {
+  if (!tailoredResume?.trim()) {
+    alert("Generate a tailored resume before exporting.");
+    return;
+  }
+
+  const printWindow = window.open(
+    "",
+    "_blank",
+    "width=900,height=700"
+  );
+
+  if (!printWindow) {
+    alert(
+      "Your browser blocked the export window. Please allow pop-ups and try again."
+    );
+    return;
+  }
+
+  const escapeHtml = (value: string) =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+  const safeResume = escapeHtml(tailoredResume);
+
+  printWindow.document.open();
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1.0"
+        />
+        <title>Tailored Resume - Workivo</title>
+
+        <style>
+          @page {
+            size: A4;
+            margin: 18mm;
+          }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            padding: 32px;
+            background: #ffffff;
+            color: #1e293b;
+            font-family: Arial, Helvetica, sans-serif;
+          }
+
+          .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            margin: 0 auto 28px;
+            max-width: 800px;
+          }
+
+          .brand {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+          }
+
+          .hint {
+            margin-top: 5px;
+            color: #64748b;
+            font-size: 12px;
+          }
+
+          .print-button {
+            padding: 10px 16px;
+            border: 1px solid #cbd5e1;
+            border-radius: 9px;
+            background: #ffffff;
+            color: #334155;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+          }
+
+          .resume {
+            max-width: 800px;
+            margin: 0 auto;
+            font-size: 11pt;
+            line-height: 1.65;
+            overflow-wrap: anywhere;
+          }
+
+          .resume-text {
+            white-space: pre-wrap;
+          }
+
+          @media print {
+            body {
+              padding: 0;
+              color: #000000;
+            }
+
+            .toolbar {
+              display: none;
+            }
+
+            .resume {
+              max-width: none;
+            }
+          }
+        </style>
+      </head>
+
+      <body>
+        <header class="toolbar">
+          <div>
+            <div class="brand">WORKIVO</div>
+            <div class="hint">
+              Use Print to save your resume as a PDF.
+            </div>
+          </div>
+
+          <button
+            class="print-button"
+            onclick="window.print()"
+          >
+            Print / Save as PDF
+          </button>
+        </header>
+
+        <main class="resume">
+          <div class="resume-text">${safeResume}</div>
+        </main>
+
+        <script>
+          window.onload = function () {
+            window.focus();
+          };
+        </script>
+      </body>
+    </html>
+  `);
+
+  printWindow.document.close();
+};
 
   /* =========================================================
      ATS SCAN PIPELINE
@@ -2708,18 +2910,36 @@ const renderTailoredWorkspace = () => {
         <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white/75 p-6 shadow-sm backdrop-blur-xl dark:border-slate-800/80 dark:bg-slate-900/70">
           <div className="pointer-events-none absolute -left-20 -bottom-20 h-48 w-48 rounded-full bg-purple-500/5 blur-3xl" />
 
-          <div className="relative flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                Generated Resume
-              </p>
+          <div className="relative flex flex-wrap items-center justify-between gap-3">
+  <div>
+    <p className="text-sm font-medium text-purple-600 dark:text-purple-400">
+      Generated Resume
+    </p>
 
-              <h3 className="mt-1 text-xl font-bold text-slate-900 dark:text-white">
-                Your Tailored Version
-              </h3>
-            </div>
+    <h3 className="mt-1 text-xl font-bold text-slate-900 dark:text-white">
+      Your Tailored Version
+    </h3>
+  </div>
 
-            {tailoredResume && (
+  <div className="flex items-center gap-2">
+    {tailoredResume && (
+      <button
+        type="button"
+        onClick={handleExportTailoredResume}
+        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-purple-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-purple-500/30 dark:hover:bg-slate-800"
+      >
+        <FileText className="h-4 w-4" />
+        Download PDF
+      </button>
+    )}
+
+    {tailoredResume && (
+      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 dark:bg-emerald-500/10">
+        <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+      </div>
+    )}
+  </div>
+</div>
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 dark:bg-emerald-500/10">
                 <CheckCircle2 className="h-5 w-5 text-emerald-500" />
               </div>
