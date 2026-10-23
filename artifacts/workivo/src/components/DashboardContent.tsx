@@ -2940,12 +2940,7 @@ const renderTailoredWorkspace = () => {
     )}
   </div>
 </div>
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 dark:bg-emerald-500/10">
-                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-              </div>
-            )}
-          </div>
-
+   
           <div className="relative mt-6 min-h-[420px] rounded-xl border border-slate-200/70 bg-slate-50/70 p-5 dark:border-slate-800 dark:bg-slate-800/40">
             {tailoredResume ? (
               <pre className="whitespace-pre-wrap font-sans text-sm leading-7 text-slate-700 dark:text-slate-300">
