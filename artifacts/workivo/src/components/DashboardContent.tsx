@@ -469,6 +469,8 @@ const [isTrackerSaving, setIsTrackerSaving] =
       setTailoredResume(null);
       setJobDescription("");
     }
+    };
+    
   /* =========================================================
      LOAD USER DATA AFTER REFRESH
      ========================================================= */
