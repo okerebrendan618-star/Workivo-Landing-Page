@@ -318,33 +318,40 @@ const [isTrackerSaving, setIsTrackerSaving] =
 
     if (!user) return;
 
-    const [
-  latestResumeResult,
-  resumeCountResult,
-  usageResult,
-  subscriptionUsageResult,
-  tailoredResult,
-] = await Promise.all([
-      supabase
-  .from("subscription_usage")
-  .select("tailored_resumes, period_start")
-  .eq(
-    "period_start",
-    `${new Date().getFullYear()}-${String(
-      new Date().getMonth() + 1
-    ).padStart(2, "0")}-01`
-  )
-  .eq("user_id", user.id)
-  .maybeSingle(),
+        const currentDate = new Date();
 
+    const periodStart = `${currentDate.getFullYear()}-${String(
+      currentDate.getMonth() + 1
+    ).padStart(2, "0")}-01`;
+
+    const [
+      latestResumeResult,
+      resumeCountResult,
+      usageResult,
+      subscriptionUsageResult,
+      tailoredResult,
+    ] = await Promise.all([
+      // 1. Load the user's latest ORIGINAL uploaded resume.
       supabase
         .from("resumes")
-        .select("*", {
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        })
+        .limit(1)
+        .maybeSingle(),
+
+      // 2. Count the user's uploaded resumes.
+      supabase
+        .from("resumes")
+        .select("id", {
           count: "exact",
           head: true,
         })
         .eq("user_id", user.id),
 
+      // 3. Load the legacy usage counters.
       supabase
         .from("user_usage")
         .select(
@@ -353,6 +360,17 @@ const [isTrackerSaving, setIsTrackerSaving] =
         .eq("user_id", user.id)
         .maybeSingle(),
 
+      // 4. Load the authoritative monthly subscription usage.
+      supabase
+        .from("subscription_usage")
+        .select(
+          "tailored_resumes, period_start"
+        )
+        .eq("user_id", user.id)
+        .eq("period_start", periodStart)
+        .maybeSingle(),
+
+      // 5. Load the latest generated tailored resume.
       supabase
         .from("tailored_resumes")
         .select(
@@ -366,14 +384,20 @@ const [isTrackerSaving, setIsTrackerSaving] =
         .maybeSingle(),
     ]);
 
+    // RESTORE THE ORIGINAL UPLOADED RESUME.
+
     if (latestResumeResult.error) {
       console.error(
-        "LATEST RESUME ERROR:",
+        "LATEST RESUME LOAD ERROR:",
         latestResumeResult.error
       );
-    } else if (latestResumeResult.data) {
-      setLatestResume(latestResumeResult.data);
+    } else {
+      setLatestResume(
+        latestResumeResult.data ?? null
+      );
     }
+
+    // RESTORE THE UPLOADED RESUME COUNT.
 
     if (resumeCountResult.error) {
       console.error(
@@ -381,52 +405,52 @@ const [isTrackerSaving, setIsTrackerSaving] =
         resumeCountResult.error
       );
     } else {
-      setResumeCount(resumeCountResult.count || 0);
+      setResumeCount(
+        resumeCountResult.count ?? 0
+      );
     }
+
+    // RESTORE USAGE COUNTERS FROM THEIR CORRECT SOURCES.
 
     if (usageResult.error) {
       console.error(
         "USAGE LOAD ERROR:",
         usageResult.error
       );
-    } else if (usageResult.data) {
-      setUsage({
-        atsScans:
-          Number(usageResult.data.ats_scans) || 0,
-
-        tailoredResumes:
-  Number(
-    subscriptionUsageResult.data?.tailored_resumes
-  ) || 0,
-        jobMatches:
-          Number(usageResult.data.job_matches) || 0,
-
-        trackedApplications:
-          Number(
-            usageResult.data.tracked_applications
-          ) || 0,
-      });
-    } else {
-      try {
-        await persistUsage(user.id, {
-          atsScans: 0,
-          tailoredResumes: 0,
-          jobMatches: 0,
-          trackedApplications: 0,
-        });
-      } catch (error) {
-        console.error(
-          "INITIAL USAGE CREATE ERROR:",
-          error
-        );
-      }
     }
+
     if (subscriptionUsageResult.error) {
-  console.error(
-    "SUBSCRIPTION USAGE LOAD ERROR:",
-    subscriptionUsageResult.error
-  );
-}
+      console.error(
+        "SUBSCRIPTION USAGE LOAD ERROR:",
+        subscriptionUsageResult.error
+      );
+    }
+
+    setUsage((previousUsage) => ({
+      ...previousUsage,
+
+      atsScans:
+        Number(
+          usageResult.data?.ats_scans
+        ) || 0,
+
+      tailoredResumes:
+        Number(
+          subscriptionUsageResult.data?.tailored_resumes
+        ) || 0,
+
+      jobMatches:
+        Number(
+          usageResult.data?.job_matches
+        ) || 0,
+
+      trackedApplications:
+        Number(
+          usageResult.data?.tracked_applications
+        ) || 0,
+    }));
+
+    // RESTORE THE LATEST GENERATED TAILORED RESUME.
 
     if (tailoredResult.error) {
       console.error(
@@ -441,9 +465,10 @@ const [isTrackerSaving, setIsTrackerSaving] =
       setJobDescription(
         tailoredResult.data.job_description || ""
       );
+    } else {
+      setTailoredResume(null);
+      setJobDescription("");
     }
-  };
-
   /* =========================================================
      LOAD USER DATA AFTER REFRESH
      ========================================================= */
